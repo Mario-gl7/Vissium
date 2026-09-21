@@ -1,0 +1,9 @@
+PySide6>=6.5
+pydicom>=2.4
+vtk>=9.2
+numpy>=1.24
+
+# Solo necesarios en Windows, para la integración en segundo plano con
+# el Explorador de Windows (icono de bandeja + barra espaciadora).
+pywin32>=306; sys_platform == "win32"
+keyboard>=0.13; sys_platform == "win32"
