@@ -55,14 +55,24 @@ class Volume:
         return self.array[z, :, :]
 
     def sagittal(self, x: int) -> np.ndarray:
-        """Corte sagital (plano YZ) en la posición x. Filas=Z, columnas=Y."""
+        """
+        Corte sagital (plano YZ) en la posición x. Filas=Z, columnas=Y.
+        Se voltea verticalmente el eje Z: el índice más alto (más
+        superior, según la convención LPS de DICOM) queda arriba en la
+        imagen, como en un visor radiológico normal -- si no, la vista
+        sale boca abajo.
+        """
         x = int(np.clip(x, 0, self.shape[2] - 1))
-        return self.array[:, :, x]  # shape (Z, Y)
+        return self.array[::-1, :, x]  # shape (Z, Y), Z invertido
 
     def coronal(self, y: int) -> np.ndarray:
-        """Corte coronal (plano XZ) en la posición y. Filas=Z, columnas=X."""
+        """
+        Corte coronal (plano XZ) en la posición y. Filas=Z, columnas=X.
+        Igual que en `sagittal`, se voltea el eje Z para que lo
+        superior quede arriba.
+        """
         y = int(np.clip(y, 0, self.shape[1] - 1))
-        return self.array[:, y, :]  # shape (Z, X)
+        return self.array[::-1, y, :]  # shape (Z, X), Z invertido
 
     # -- Tamaño físico (mm) de cada vista, para corregir el aspecto ---
     def axial_physical_size(self) -> tuple[float, float]:

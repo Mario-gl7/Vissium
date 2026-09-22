@@ -2,12 +2,18 @@
 Visor MPR de DICOM al estilo 3D Slicer.
 
 - Tres vistas ortogonales con los colores estándar de Slicer:
-  Axial = rojo, Sagital = amarillo, Coronal = verde.
+  Axial = rojo, Sagital = amarillo, Coronal = verde. Las tres tienen
+  el mismo tamaño y un ancho mínimo cómodo por defecto.
 - Retícula de referencia cruzada: cada vista muestra dónde están
-  posicionadas las otras dos, y se puede hacer clic (o arrastrar) en
-  cualquier vista para mover las otras dos a ese punto.
-- Panel de información de paciente/estudio/serie, como el panel de
-  información de Slicer.
+  posicionadas las otras dos, y se puede hacer clic (o arrastrar con
+  el botón izquierdo) en cualquier vista para mover las otras dos a
+  ese punto.
+- Rueda del ratón: avanza/retrocede los cortes de la vista bajo el
+  cursor. Botón derecho + arrastrar: zoom de esa vista.
+- Doble clic sobre una vista: la pone a pantalla completa dentro del
+  visor (doble clic otra vez para restaurar las tres).
+- Panel de información de paciente/estudio/serie, más ancho para que
+  quepa todo el texto.
 - Respeta el espaciado físico real de cada eje (importante en CBCT).
 """
 from __future__ import annotations
@@ -19,6 +25,7 @@ from PySide6.QtWidgets import (
     QWidget,
     QGridLayout,
     QVBoxLayout,
+    QHBoxLayout,
     QLabel,
     QSlider,
     QSizePolicy,
@@ -37,6 +44,10 @@ CROSSHAIR_COLOR = "#22d3ff"
 DARK_BG = "#1e1e1e"
 PANEL_BG = "#2b2b2b"
 
+# Tamaño mínimo cómodo por vista, y ancho fijo del panel de información.
+MIN_VIEW_SIZE = 280
+INFO_PANEL_WIDTH = 340
+
 _DARK_STYLESHEET = f"""
 QWidget {{ background-color: {PANEL_BG}; color: #dddddd; }}
 QGroupBox {{
@@ -53,18 +64,30 @@ QSlider::handle:horizontal {{
 
 
 class _ImageView(QLabel):
-    """Panel de imagen: emite un punto normalizado (0..1, 0..1) al clicar/arrastrar."""
+    """
+    Panel de imagen de un plano.
+
+    - Clic/arrastre con botón izquierdo: emite un punto normalizado
+      (0..1, 0..1) para la navegación cruzada.
+    - Rueda del ratón: emite +1/-1 para avanzar/retroceder de corte.
+    - Botón derecho + arrastrar (vertical): emite un factor de zoom.
+    - Doble clic: pide poner esta vista a pantalla completa.
+    """
 
     pointClicked = Signal(float, float)
+    wheelScrolled = Signal(int)
+    zoomRequested = Signal(float)
+    doubleClicked = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setMinimumSize(160, 160)
+        self.setMinimumSize(MIN_VIEW_SIZE, MIN_VIEW_SIZE)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setStyleSheet(f"background-color: {DARK_BG};")
         self.setCursor(Qt.CursorShape.CrossCursor)
         self._pixmap_rect = None  # (x, y, w, h) del pixmap dentro del label
+        self._right_drag_y = None
 
     def set_display_pixmap(self, pixmap: QPixmap):
         self.setPixmap(pixmap)
@@ -83,25 +106,56 @@ class _ImageView(QLabel):
         if 0.0 <= u <= 1.0 and 0.0 <= v <= 1.0:
             self.pointClicked.emit(u, v)
 
+    # -- Navegación con clic izquierdo ---------------------------------
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             self._emit_from_pos(event.position())
+        elif event.button() == Qt.MouseButton.RightButton:
+            self._right_drag_y = event.position().y()
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
         if event.buttons() & Qt.MouseButton.LeftButton:
             self._emit_from_pos(event.position())
+        elif event.buttons() & Qt.MouseButton.RightButton and self._right_drag_y is not None:
+            current_y = event.position().y()
+            dy = self._right_drag_y - current_y  # arriba = acercar
+            if abs(dy) >= 1:
+                factor = 1.0 + (dy * 0.01)
+                factor = max(0.5, min(factor, 1.5))
+                self.zoomRequested.emit(factor)
+                self._right_drag_y = current_y
         super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.RightButton:
+            self._right_drag_y = None
+        super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.doubleClicked.emit()
+        super().mouseDoubleClickEvent(event)
+
+    # -- Rueda del ratón: avanzar/retroceder cortes ---------------------
+    def wheelEvent(self, event):
+        delta = event.angleDelta().y()
+        if delta != 0:
+            self.wheelScrolled.emit(1 if delta > 0 else -1)
+        event.accept()
 
 
 class _PlaneView(QWidget):
     """Un panel MPR completo: cabecera de color, imagen, slider e info."""
 
     pointClicked = Signal(float, float)
+    zoomChanged = Signal()
+    doubleClicked = Signal()
 
     def __init__(self, title: str, color: str, parent=None):
         super().__init__(parent)
         self.color = color
+        self.zoom = 1.0
 
         header = QLabel(title, self)
         header.setStyleSheet(
@@ -111,6 +165,9 @@ class _PlaneView(QWidget):
 
         self.image_view = _ImageView(self)
         self.image_view.pointClicked.connect(self.pointClicked)
+        self.image_view.wheelScrolled.connect(self._on_wheel)
+        self.image_view.zoomRequested.connect(self._on_zoom)
+        self.image_view.doubleClicked.connect(self.doubleClicked)
 
         self.slider = QSlider(Qt.Orientation.Horizontal, self)
 
@@ -125,6 +182,13 @@ class _PlaneView(QWidget):
         layout.addWidget(self.image_view, stretch=1)
         layout.addWidget(self.slider)
         layout.addWidget(self.info_label)
+
+    def _on_wheel(self, direction: int):
+        self.slider.setValue(self.slider.value() + direction)
+
+    def _on_zoom(self, factor: float):
+        self.zoom = max(0.2, min(self.zoom * factor, 8.0))
+        self.zoomChanged.emit()
 
     def set_pixmap_from_array(
         self,
@@ -162,6 +226,8 @@ class _PlaneView(QWidget):
                 target_w, target_h = box_w, max(1, int(box_w / phys_aspect))
             else:
                 target_h, target_w = box_h, max(1, int(box_h * phys_aspect))
+            target_w = max(1, int(target_w * self.zoom))
+            target_h = max(1, int(target_h * self.zoom))
             scaled = pixmap.scaled(
                 target_w, target_h,
                 Qt.AspectRatioMode.IgnoreAspectRatio,
@@ -199,6 +265,10 @@ class DicomViewer(QWidget):
             ))
             return
 
+        # Ancho por defecto suficiente para ver las tres vistas + el
+        # panel de información con comodidad.
+        self.setMinimumSize(MIN_VIEW_SIZE * 2 + INFO_PANEL_WIDTH + 40, MIN_VIEW_SIZE * 2 + 80)
+
         n_z, n_y, n_x = self.volume.shape
 
         self.axial_view = _PlaneView("AXIAL", PLANE_COLORS["axial"], self)
@@ -219,6 +289,14 @@ class DicomViewer(QWidget):
         self.sagittal_view.pointClicked.connect(self._on_sagittal_clicked)
         self.coronal_view.pointClicked.connect(self._on_coronal_clicked)
 
+        self.axial_view.zoomChanged.connect(self._render_axial)
+        self.sagittal_view.zoomChanged.connect(self._render_sagittal)
+        self.coronal_view.zoomChanged.connect(self._render_coronal)
+
+        self.axial_view.doubleClicked.connect(lambda: self._toggle_maximize("axial"))
+        self.sagittal_view.doubleClicked.connect(lambda: self._toggle_maximize("sagittal"))
+        self.coronal_view.doubleClicked.connect(lambda: self._toggle_maximize("coronal"))
+
         # Ventana / nivel compartida entre las tres vistas.
         self._wl_center = 0.0
         self._wl_width = 1.0
@@ -236,6 +314,7 @@ class DicomViewer(QWidget):
         info_box = QGroupBox("Información", self)
         info_form = QFormLayout(info_box)
         info_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        info_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         for key, value in self.volume.metadata.items():
             value_label = QLabel(value, self)
             value_label.setWordWrap(True)
@@ -265,15 +344,37 @@ class DicomViewer(QWidget):
         side_layout.addStretch(1)
         side_widget = QWidget(self)
         side_widget.setLayout(side_layout)
-        side_widget.setMaximumWidth(240)
+        side_widget.setFixedWidth(INFO_PANEL_WIDTH)
+        self.side_widget = side_widget
 
-        grid = QGridLayout(self)
-        grid.setContentsMargins(4, 4, 4, 4)
-        grid.setSpacing(4)
-        grid.addWidget(self.axial_view, 0, 0)
-        grid.addWidget(self.coronal_view, 0, 1)
-        grid.addWidget(self.sagittal_view, 1, 0)
-        grid.addWidget(side_widget, 1, 1)
+        # Las tres vistas ocupan una rejilla 2x2 con celdas del mismo
+        # tamaño (una celda queda vacía); el panel lateral es
+        # independiente, con ancho fijo propio.
+        self.views_grid = QGridLayout()
+        self.views_grid.setContentsMargins(0, 0, 0, 0)
+        self.views_grid.setSpacing(4)
+        self.views_grid.setRowStretch(0, 1)
+        self.views_grid.setRowStretch(1, 1)
+        self.views_grid.setColumnStretch(0, 1)
+        self.views_grid.setColumnStretch(1, 1)
+
+        self._plane_positions = {
+            "axial": (self.axial_view, 0, 0, 1, 1),
+            "coronal": (self.coronal_view, 0, 1, 1, 1),
+            "sagittal": (self.sagittal_view, 1, 0, 1, 1),
+        }
+        for widget, row, col, rspan, cspan in self._plane_positions.values():
+            self.views_grid.addWidget(widget, row, col, rspan, cspan)
+        self._maximized: str | None = None
+
+        views_widget = QWidget(self)
+        views_widget.setLayout(self.views_grid)
+
+        outer = QHBoxLayout(self)
+        outer.setContentsMargins(4, 4, 4, 4)
+        outer.setSpacing(4)
+        outer.addWidget(views_widget, stretch=1)
+        outer.addWidget(side_widget)
 
         self._render_all()
 
@@ -302,22 +403,50 @@ class DicomViewer(QWidget):
         return self._wl_center - self._wl_width / 2, self._wl_center + self._wl_width / 2
 
     # ------------------------------------------------------------------
+    # Pantalla completa de una vista dentro del visor
+    # ------------------------------------------------------------------
+    def _toggle_maximize(self, name: str):
+        # Quitar todo de la rejilla antes de recolocar.
+        for widget, *_ in self._plane_positions.values():
+            self.views_grid.removeWidget(widget)
+
+        if self._maximized == name:
+            for widget, row, col, rspan, cspan in self._plane_positions.values():
+                self.views_grid.addWidget(widget, row, col, rspan, cspan)
+                widget.show()
+            self._maximized = None
+        else:
+            target_widget = self._plane_positions[name][0]
+            self.views_grid.addWidget(target_widget, 0, 0, 2, 2)
+            target_widget.show()
+            for key, (widget, *_rest) in self._plane_positions.items():
+                if key != name:
+                    widget.hide()
+            self._maximized = name
+
+        self._render_all()
+
+    # ------------------------------------------------------------------
     # Navegación por clic: mover las OTRAS dos vistas al punto pulsado.
+    # Los planos sagital/coronal muestran el eje Z invertido (superior
+    # arriba), así que su coordenada vertical se traduce al revés.
     # ------------------------------------------------------------------
     def _on_axial_clicked(self, u: float, v: float):
         n_z, n_y, n_x = self.volume.shape
-        self.sagittal_view.slider.setValue(int(np.clip(u * n_x, 0, n_x - 1)))
-        self.coronal_view.slider.setValue(int(np.clip(v * n_y, 0, n_y - 1)))
+        self.sagittal_view.slider.setValue(int(np.clip(round(u * (n_x - 1)), 0, n_x - 1)))
+        self.coronal_view.slider.setValue(int(np.clip(round(v * (n_y - 1)), 0, n_y - 1)))
 
     def _on_sagittal_clicked(self, u: float, v: float):
         n_z, n_y, n_x = self.volume.shape
-        self.coronal_view.slider.setValue(int(np.clip(u * n_y, 0, n_y - 1)))
-        self.axial_view.slider.setValue(int(np.clip(v * n_z, 0, n_z - 1)))
+        self.coronal_view.slider.setValue(int(np.clip(round(u * (n_y - 1)), 0, n_y - 1)))
+        z_idx = round((1.0 - v) * (n_z - 1))
+        self.axial_view.slider.setValue(int(np.clip(z_idx, 0, n_z - 1)))
 
     def _on_coronal_clicked(self, u: float, v: float):
         n_z, n_y, n_x = self.volume.shape
-        self.sagittal_view.slider.setValue(int(np.clip(u * n_x, 0, n_x - 1)))
-        self.axial_view.slider.setValue(int(np.clip(v * n_z, 0, n_z - 1)))
+        self.sagittal_view.slider.setValue(int(np.clip(round(u * (n_x - 1)), 0, n_x - 1)))
+        z_idx = round((1.0 - v) * (n_z - 1))
+        self.axial_view.slider.setValue(int(np.clip(z_idx, 0, n_z - 1)))
 
     # ------------------------------------------------------------------
     def _render_all(self):
@@ -343,7 +472,8 @@ class DicomViewer(QWidget):
         low, high = self._window_bounds()
         w, h = self.volume.sagittal_physical_size()
         cross_u = self.coronal_view.slider.value() / max(n_y - 1, 1)
-        cross_v = self.axial_view.slider.value() / max(n_z - 1, 1)
+        # eje Z invertido en esta vista -> la posición vertical va al revés
+        cross_v = 1.0 - (self.axial_view.slider.value() / max(n_z - 1, 1))
         self.sagittal_view.set_pixmap_from_array(arr, low, high, w, h, cross_u, cross_v)
         self.sagittal_view.info_label.setText(f"X: {x + 1} / {n_x}")
 
@@ -354,7 +484,7 @@ class DicomViewer(QWidget):
         low, high = self._window_bounds()
         w, h = self.volume.coronal_physical_size()
         cross_u = self.sagittal_view.slider.value() / max(n_x - 1, 1)
-        cross_v = self.axial_view.slider.value() / max(n_z - 1, 1)
+        cross_v = 1.0 - (self.axial_view.slider.value() / max(n_z - 1, 1))
         self.coronal_view.set_pixmap_from_array(arr, low, high, w, h, cross_u, cross_v)
         self.coronal_view.info_label.setText(f"Y: {y + 1} / {n_y}")
 
