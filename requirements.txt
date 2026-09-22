@@ -3,6 +3,16 @@ pydicom>=2.4
 vtk>=9.2
 numpy>=1.24
 
+# Decodificadores para DICOM con sintaxis de transferencia comprimida
+# (JPEG, JPEG-LS, JPEG2000, RLE) -- sin esto, pydicom puede fallar al
+# leer el píxel de archivos comprimidos, con un error confuso. Con
+# esto instalado, la cobertura de formatos se acerca a la que usa
+# 3D Slicer internamente (basada en GDCM).
+pylibjpeg>=2.0
+pylibjpeg-libjpeg>=2.1
+pylibjpeg-openjpeg>=2.1
+python-gdcm>=3.0
+
 # Solo necesarios en Windows, para la integración en segundo plano con
 # el Explorador de Windows (icono de bandeja + barra espaciadora).
 pywin32>=306; sys_platform == "win32"
