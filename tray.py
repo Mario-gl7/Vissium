@@ -11,6 +11,8 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QIcon, QPixmap, QPainter, QColor, QFont
 from PySide6.QtWidgets import QSystemTrayIcon, QMenu, QApplication
 
+from foreground import bring_window_to_front
+
 
 def _build_icon() -> QIcon:
     size = 64
@@ -39,7 +41,7 @@ def build_tray_icon(window, qapp: QApplication) -> QSystemTrayIcon:
     menu = QMenu()
 
     show_action = menu.addAction("Mostrar ventana de previsualizaciones")
-    show_action.triggered.connect(lambda: _bring_to_front(window))
+    show_action.triggered.connect(lambda: bring_window_to_front(window))
 
     browser_action = menu.addAction("Abrir explorador manual (modo respaldo)")
     browser_action.triggered.connect(window.show_manual_browser)
@@ -50,15 +52,9 @@ def build_tray_icon(window, qapp: QApplication) -> QSystemTrayIcon:
 
     tray.setContextMenu(menu)
     tray.activated.connect(
-        lambda reason: _bring_to_front(window)
+        lambda reason: bring_window_to_front(window)
         if reason == QSystemTrayIcon.ActivationReason.Trigger
         else None
     )
     tray.show()
     return tray
-
-
-def _bring_to_front(window):
-    window.show()
-    window.raise_()
-    window.activateWindow()

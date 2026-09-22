@@ -20,10 +20,12 @@ from PySide6.QtWidgets import (
     QTabWidget,
     QStatusBar,
     QMessageBox,
+    QApplication,
 )
 
 from file_browser import FileBrowser
 from file_types import ContentType, classify_path
+from foreground import bring_window_to_front
 from viewers.dicom_viewer import DicomViewer
 from viewers.mesh_viewer import MeshViewer
 
@@ -62,17 +64,22 @@ class PreviewWindow(QMainWindow):
     def show_manual_browser(self):
         self.browser.show()
         self.splitter.setSizes([320, max(880, self.width() - 320)])
-        self.show()
-        self.raise_()
-        self.activateWindow()
+        bring_window_to_front(self)
 
     def open_many_and_show(self, paths: list[str]):
         """Llamado desde el hook global de Espacio (una o varias rutas)."""
+        # Primero se muestra y se sube al frente la ventana, y se fuerza
+        # un repintado inmediato -- así se percibe como instantánea
+        # aunque la carga del contenido (DICOM/STL) tarde un poco más.
+        bring_window_to_front(self)
+        QApplication.processEvents()
+
         for path in paths:
             self.open_preview(path)
-        self.show()
-        self.raise_()
-        self.activateWindow()
+
+        # La carga puede haber tardado lo suyo; nos aseguramos de que
+        # seguimos en primer plano al terminar.
+        bring_window_to_front(self)
 
     # ------------------------------------------------------------------
     def show_status(self, message: str):
