@@ -1,11 +1,15 @@
-# FastLook
+# Vissium
 
 Visor local y offline de **DICOM** (con las tres vistas MPR: axial,
 sagital y coronal) y mallas **STL/PLY**, que se ejecuta en segundo
 plano e integrado con el **Explorador de Windows**: seleccionas un
 archivo o carpeta en el Explorador normal de Windows y pulsas la
 **barra espaciadora** para abrir una vista previa, sin necesidad de
-tener FastLook abierto — al estilo "Quick Look" de macOS.
+tener Vissium abierto — al estilo "Quick Look" de macOS.
+
+> Vissium se llamaba antes **FastLook**; el repositorio de GitHub
+> conserva ese nombre por ahora (`Mario-gl7/FastLook`) — si lo
+> renombras en GitHub, actualiza `GITHUB_REPO` en `version.py`.
 
 ## Instalación (Windows)
 
@@ -26,9 +30,9 @@ venv\Scripts\activate
 python main.py
 ```
 
-Al arrancar no aparece ninguna ventana: FastLook se queda como un
-icono **"FL"** en la bandeja del sistema (junto al reloj), escuchando
-en segundo plano.
+Al arrancar no aparece ninguna ventana: Vissium se queda como un
+icono en la bandeja del sistema (junto al reloj), escuchando en
+segundo plano.
 
 ## Uso
 
@@ -37,7 +41,7 @@ en segundo plano.
    `.stl`/`.ply`.
 2. Selecciona el archivo o la carpeta y pulsa **Espacio**.
 3. Se abre (o se trae al frente, si ya estaba abierta) la ventana de
-   FastLook con una pestaña nueva para esa previsualización:
+   Vissium con una pestaña nueva para esa previsualización:
    - **DICOM**: se muestran las tres vistas ortogonales — axial,
      sagital y coronal — cada una con su propio slider para recorrer
      los cortes, más controles de ventana/nivel (brillo/contraste)
@@ -49,22 +53,22 @@ en segundo plano.
      para zoom).
 4. Volver a pulsar Espacio sobre algo ya abierto simplemente cambia a
    esa pestaña, sin duplicarla.
-5. Cerrar la ventana de FastLook (la "x") NO cierra la aplicación:
+5. Cerrar la ventana de Vissium (la "x") NO cierra la aplicación:
    sigue activa en la bandeja. Para cerrarla de verdad, usa "Salir de
-   FastLook" en el menú de la bandeja (clic derecho sobre el icono).
+   Vissium" en el menú de la bandeja (clic derecho sobre el icono).
 
 ### Modo de respaldo (explorador manual)
 
 Si por lo que sea la integración con el Explorador de Windows no
 funciona en tu equipo (ver limitaciones más abajo), desde el menú de
 la bandeja hay una opción **"Abrir explorador manual (modo
-respaldo)"**: abre la ventana de FastLook con su propio árbol de
+respaldo)"**: abre la ventana de Vissium con su propio árbol de
 carpetas, donde la barra espaciadora funciona igual pero sin depender
 del Explorador de Windows.
 
 ## Arrancar automáticamente con Windows (opcional)
 
-Para que FastLook se inicie solo al arrancar Windows:
+Para que Vissium se inicie solo al arrancar Windows:
 
 1. Pulsa `Win + R`, escribe `shell:startup` y pulsa Enter (se abre la
    carpeta de inicio de tu usuario).
@@ -73,11 +77,72 @@ Para que FastLook se inicie solo al arrancar Windows:
    `ruta\a\fastlook\main.py` (usa `pythonw.exe`, no `python.exe`, para
    que no se abra ninguna ventana de consola).
 
+## Compilar el ejecutable (.exe)
+
+Vissium se distribuye como un único `.exe` de Windows (generado con
+PyInstaller), con el icono de la app y sin ventana de consola.
+
+**En Windows, manualmente:**
+
+```
+venv\Scripts\activate
+build.bat
+```
+
+El resultado queda en `dist\Vissium.exe`.
+
+**Automáticamente en GitHub (recomendado):** el workflow
+`.github/workflows/release.yml` compila el `.exe` en un runner de
+Windows y lo publica como Release cada vez que se sube un tag de
+versión. Ver la siguiente sección.
+
+## Ramas y publicación de versiones
+
+- **`testing`**: rama de trabajo/pruebas. Aquí se hacen los cambios
+  del día a día.
+- **`master`**: rama estable. Solo se actualiza fusionando (`merge`)
+  desde `testing` cuando algo está listo para publicarse.
+
+Para sacar una versión nueva:
+
+1. Sube el número en `version.py` (`__version__`).
+2. Haz merge de `testing` a `master`.
+3. Sobre `master`, crea y sube un tag con el mismo número (con
+   prefijo `v`):
+
+   ```
+   git checkout master
+   git pull
+   git tag v1.1.0
+   git push origin v1.1.0
+   ```
+
+4. El workflow de GitHub Actions compila `Vissium.exe` y crea
+   automáticamente un Release con el `.exe` adjunto.
+
+## Actualizaciones automáticas
+
+Vissium comprueba en segundo plano, al arrancar (y también a mano
+desde "Buscar actualizaciones…" en el menú de la bandeja), si hay una
+versión más nueva publicada en GitHub Releases. Como los Releases
+solo se crean sobre `master` (nunca sobre `testing`), la app nunca
+detecta como "actualización" un cambio que todavía esté en pruebas —
+solo lo que ya se ha liberado.
+
+Si hay una versión nueva, se ofrece actualizar; al confirmar, se
+descarga el `.exe` nuevo y se sustituye automáticamente el que está
+en ejecución, reiniciando la app. Esto solo funciona con la app
+instalada como `.exe` en Windows (no en modo "código fuente" con
+`python main.py`, donde solo se avisa de que hay versión nueva).
+
 ## Estructura del proyecto
 
 ```
-fastlook/
-  main.py                    Punto de entrada: arranca la bandeja y el hook de teclado
+vissium/
+  main.py                    Punto de entrada: arranca la bandeja, el hook de teclado y el chequeo de actualizaciones
+  version.py                 Número de versión, nombre de la app y repo de GitHub (única fuente de verdad)
+  updater.py                 Comprueba GitHub Releases y aplica la actualización sustituyendo el .exe
+  paths.py                   Resolución de rutas a recursos, válida en fuente y en el .exe empaquetado
   preview_window.py          Ventana de pestañas con las previsualizaciones (oculta hasta que se necesita)
   tray.py                    Icono y menú de la bandeja del sistema
   explorer_integration.py    Obtiene la selección activa del Explorador de Windows (COM)
@@ -88,6 +153,11 @@ fastlook/
   viewers/
     dicom_viewer.py            Visor MPR (axial + sagital + coronal)
     mesh_viewer.py              Visor 3D de STL/PLY (VTK)
+  assets/
+    icon.ico / icon.png        Icono de la app (bandeja del sistema y .exe)
+  vissium.spec                Configuración de PyInstaller para compilar el .exe
+  build.bat                   Script para compilar el .exe a mano en Windows
+  .github/workflows/release.yml  CI: compila y publica el .exe al subir un tag de versión
   requirements.txt
 ```
 
@@ -114,7 +184,7 @@ fastlook/
   previsualización (solo dentro de carpetas abiertas).
 - Como alternativa más robusta al hook global (si en tu equipo da
   problemas), una mejora natural sería añadir una entrada al menú
-  contextual del botón derecho ("Vista previa con FastLook") mediante
+  contextual del botón derecho ("Vista previa con Vissium") mediante
   el Registro de Windows, que no depende de hooks de teclado. Si te
   interesa, lo añadimos en otra iteración.
 - El resto de la lógica (clasificación de archivos, reconstrucción

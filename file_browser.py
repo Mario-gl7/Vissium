@@ -1,5 +1,5 @@
 """
-Explorador de archivos propio de FastLook.
+Explorador de archivos propio de Vissium.
 
 Muestra el árbol de carpetas/archivos del sistema y emite una señal
 `previewRequested(str)` con la ruta seleccionada cuando el usuario
@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
 )
 
-# Extensiones que FastLook sabe previsualizar.
+# Extensiones que Vissium sabe previsualizar.
 DICOM_EXTENSIONS = {".dcm", ".dicom", ""}  # los DICOM a veces no tienen extensión
 MESH_EXTENSIONS = {".stl", ".ply"}
 SUPPORTED_EXTENSIONS = DICOM_EXTENSIONS | MESH_EXTENSIONS

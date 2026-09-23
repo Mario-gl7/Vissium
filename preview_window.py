@@ -1,5 +1,5 @@
 """
-Ventana de previsualizaciones de FastLook.
+Ventana de previsualizaciones de Vissium.
 
 No es la interfaz principal (la app vive en segundo plano, en la
 bandeja del sistema): esta ventana aparece automáticamente cuando se
@@ -28,12 +28,13 @@ from file_types import ContentType, classify_path
 from foreground import bring_window_to_front
 from viewers.dicom_viewer import DicomViewer
 from viewers.mesh_viewer import MeshViewer
+from version import APP_NAME
 
 
 class PreviewWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("FastLook")
+        self.setWindowTitle(APP_NAME)
         self.resize(1200, 800)
 
         self.browser = FileBrowser(parent=self)
@@ -54,7 +55,7 @@ class PreviewWindow(QMainWindow):
         self.setCentralWidget(self.splitter)
         self.setStatusBar(QStatusBar(self))
         self.show_status(
-            "FastLook en segundo plano. Selecciona un archivo en el "
+            f"{APP_NAME} en segundo plano. Selecciona un archivo en el "
             "Explorador de Windows y pulsa Espacio para previsualizarlo."
         )
 
@@ -119,7 +120,7 @@ class PreviewWindow(QMainWindow):
                     "No se reconoce contenido DICOM ni STL/PLY en esa selección"
                 )
         except Exception as exc:
-            QMessageBox.warning(self, "FastLook", f"No se pudo previsualizar:\n{exc}")
+            QMessageBox.warning(self, APP_NAME, f"No se pudo previsualizar:\n{exc}")
 
     def _add_tab(self, widget, title: str, path: str):
         index = self.tabs.addTab(widget, title)
@@ -139,7 +140,7 @@ class PreviewWindow(QMainWindow):
 
     # ------------------------------------------------------------------
     def closeEvent(self, event):
-        # Cerrar la ventana no cierra FastLook: sigue activo en la
+        # Cerrar la ventana no cierra Vissium: sigue activo en la
         # bandeja para seguir respondiendo a la barra espaciadora.
         event.ignore()
         self.hide()
