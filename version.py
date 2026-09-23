@@ -23,4 +23,4 @@ APP_NAME = "Vissium"
 # Propietario/nombre del repositorio de GitHub, usado por el
 # actualizador para consultar la API de Releases:
 # https://api.github.com/repos/{GITHUB_REPO}/releases/latest
-GITHUB_REPO = "Mario-gl7/FastLook"
+GITHUB_REPO = "Mario-gl7/Vissium"
