@@ -12,14 +12,38 @@ from __future__ import annotations
 
 import sys
 
-from PySide6.QtCore import QObject, Signal, QThread
-from PySide6.QtWidgets import QApplication, QMessageBox
+from PySide6.QtCore import QObject, Signal, QThread, QTimer, Qt
+from PySide6.QtGui import QPixmap
+from PySide6.QtWidgets import QApplication, QMessageBox, QSplashScreen
 
+from paths import resource_path
 from preview_window import PreviewWindow
 from tray import build_tray_icon
 from hotkey_listener import start_hotkey_listener, IS_WINDOWS
 from updater import check_for_update, apply_update, UpdateInfo
 from version import APP_NAME, __version__
+
+# Cuánto tiempo se mantiene visible la pantalla de carga al arrancar,
+# como confirmación visual de que la app se ha abierto (Vissium no
+# muestra ninguna otra ventana al iniciar: se queda en la bandeja).
+SPLASH_DURATION_MS = 1500
+
+
+def _build_splash_pixmap() -> QPixmap:
+    """Icono de la app ampliado, para usarlo como pantalla de carga."""
+    for name in ("icon.png", "icon.ico"):
+        pixmap = QPixmap(resource_path("assets", name))
+        if not pixmap.isNull():
+            return pixmap.scaled(
+                160, 160,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+    # Si no hay icono empaquetado (p. ej. en desarrollo), un lienzo
+    # simple deja igualmente sitio para el mensaje de carga.
+    pixmap = QPixmap(160, 160)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    return pixmap
 
 
 class _HotkeyBridge(QObject):
@@ -105,6 +129,18 @@ def main():
     # sigue viva en la bandeja, esperando la barra espaciadora.
     app.setQuitOnLastWindowClosed(False)
 
+    # Pantalla de carga: confirma visualmente que la app se ha abierto,
+    # ya que al arrancar no se muestra ninguna otra ventana (se queda
+    # en la bandeja). Se cierra sola pasado SPLASH_DURATION_MS.
+    splash = QSplashScreen(_build_splash_pixmap())
+    splash.showMessage(
+        f"Iniciando {APP_NAME}…",
+        Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter,
+        Qt.GlobalColor.white,
+    )
+    splash.show()
+    app.processEvents()  # pinta el splash ya, antes de seguir con el arranque
+
     window = PreviewWindow()
 
     update_controller = UpdateController(window, None, app)
@@ -133,8 +169,11 @@ def main():
             "menú de la bandeja.",
         )
 
+    QTimer.singleShot(SPLASH_DURATION_MS, splash.close)
+
     # Comprobación silenciosa al arrancar: si no hay nada nuevo, no se
-    # molesta al usuario con ningún aviso.
+    # molesta al usuario con ningún aviso; si hay una versión nueva, se
+    # pregunta si se quiere actualizar (ver UpdateController._offer_update).
     update_controller.check(manual=False)
 
     exit_code = app.exec()
