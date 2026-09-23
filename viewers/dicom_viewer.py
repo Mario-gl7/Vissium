@@ -19,7 +19,7 @@ Visor MPR de DICOM al estilo 3D Slicer.
 from __future__ import annotations
 
 import numpy as np
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QPointF
 from PySide6.QtGui import QImage, QPixmap, QPainter, QPen, QColor
 from PySide6.QtWidgets import (
     QWidget,
@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QSizePolicy,
     QGroupBox,
     QFormLayout,
+    QPushButton,
 )
 
 from volume import Volume, load_volume
@@ -71,6 +72,10 @@ class _ImageView(QLabel):
       (0..1, 0..1) para la navegación cruzada.
     - Rueda del ratón: emite +1/-1 para avanzar/retroceder de corte.
     - Botón derecho + arrastrar (vertical): emite un factor de zoom.
+    - Botón central (rueda) + arrastrar: desplaza (pan) la imagen
+      dentro de la vista -- imprescindible para poder moverse por la
+      zona deseada una vez se ha hecho zoom, ya que el clic izquierdo
+      está reservado para la navegación cruzada.
     - Doble clic: pide poner esta vista a pantalla completa.
     """
 
@@ -86,14 +91,46 @@ class _ImageView(QLabel):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setStyleSheet(f"background-color: {DARK_BG};")
         self.setCursor(Qt.CursorShape.CrossCursor)
-        self._pixmap_rect = None  # (x, y, w, h) del pixmap dentro del label
+        self._pixmap = None  # pixmap ya escalado, sin el desplazamiento aplicado
+        self._pixmap_rect = None  # (x, y, w, h) del pixmap dentro del label, con pan aplicado
         self._right_drag_y = None
+        self._pan_offset = [0.0, 0.0]  # desplazamiento manual (botón central) en píxeles
+        self._middle_drag_pos = None
 
     def set_display_pixmap(self, pixmap: QPixmap):
-        self.setPixmap(pixmap)
-        x = (self.width() - pixmap.width()) / 2
-        y = (self.height() - pixmap.height()) / 2
-        self._pixmap_rect = (x, y, pixmap.width(), pixmap.height())
+        self._pixmap = pixmap
+        self._update_pixmap_rect()
+        self.update()
+
+    def reset_pan(self):
+        self._pan_offset = [0.0, 0.0]
+        self._update_pixmap_rect()
+        self.update()
+
+    def _update_pixmap_rect(self):
+        if self._pixmap is None:
+            self._pixmap_rect = None
+            return
+        # OJO: QPixmap.width()/height() devuelven píxeles FÍSICOS (de
+        # dispositivo); para el centrado/pan hay que usar el tamaño
+        # LÓGICO (dividido por su devicePixelRatio), que es el tamaño
+        # con el que Qt lo va a dibujar realmente en pantalla.
+        dpr = self._pixmap.devicePixelRatio() or 1.0
+        logical_w = self._pixmap.width() / dpr
+        logical_h = self._pixmap.height() / dpr
+        x = (self.width() - logical_w) / 2 + self._pan_offset[0]
+        y = (self.height() - logical_h) / 2 + self._pan_offset[1]
+        self._pixmap_rect = (x, y, logical_w, logical_h)
+
+    def paintEvent(self, event):
+        # Pintado manual (en vez de dejar que QLabel centre el pixmap
+        # automáticamente) para poder aplicar el desplazamiento del pan.
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), QColor(DARK_BG))
+        if self._pixmap is not None and self._pixmap_rect is not None:
+            x, y, _w, _h = self._pixmap_rect
+            painter.drawPixmap(QPointF(x, y), self._pixmap)
+        painter.end()
 
     def _emit_from_pos(self, pos):
         if not self._pixmap_rect:
@@ -106,12 +143,15 @@ class _ImageView(QLabel):
         if 0.0 <= u <= 1.0 and 0.0 <= v <= 1.0:
             self.pointClicked.emit(u, v)
 
-    # -- Navegación con clic izquierdo ---------------------------------
+    # -- Navegación con clic izquierdo / zoom / pan --------------------
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             self._emit_from_pos(event.position())
         elif event.button() == Qt.MouseButton.RightButton:
             self._right_drag_y = event.position().y()
+        elif event.button() == Qt.MouseButton.MiddleButton:
+            self._middle_drag_pos = event.position()
+            self.setCursor(Qt.CursorShape.ClosedHandCursor)
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
@@ -125,17 +165,34 @@ class _ImageView(QLabel):
                 factor = max(0.5, min(factor, 1.5))
                 self.zoomRequested.emit(factor)
                 self._right_drag_y = current_y
+        elif event.buttons() & Qt.MouseButton.MiddleButton and self._middle_drag_pos is not None:
+            current_pos = event.position()
+            delta = current_pos - self._middle_drag_pos
+            self._pan_offset[0] += delta.x()
+            self._pan_offset[1] += delta.y()
+            self._middle_drag_pos = current_pos
+            self._update_pixmap_rect()
+            self.update()
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.MouseButton.RightButton:
             self._right_drag_y = None
+        elif event.button() == Qt.MouseButton.MiddleButton:
+            self._middle_drag_pos = None
+            self.setCursor(Qt.CursorShape.CrossCursor)
         super().mouseReleaseEvent(event)
 
     def mouseDoubleClickEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             self.doubleClicked.emit()
         super().mouseDoubleClickEvent(event)
+
+    def resizeEvent(self, event):
+        # Si cambia el tamaño del panel (p. ej. al maximizar una vista),
+        # recalculamos la posición del pixmap ya cargado con el pan actual.
+        self._update_pixmap_rect()
+        super().resizeEvent(event)
 
     # -- Rueda del ratón: avanzar/retroceder cortes ---------------------
     def wheelEvent(self, event):
@@ -212,10 +269,22 @@ class _PlaneView(QWidget):
         rgb_image = gray_image.convertToFormat(QImage.Format.Format_RGB32)
         pixmap = QPixmap.fromImage(rgb_image)
 
+        # Relación de píxeles físicos/lógicos de la pantalla actual (>1 en
+        # HiDPI/Retina o con el escalado de Windows por encima del 100%).
+        # Sin esto, se escala siempre al tamaño LÓGICO del panel, que en
+        # una pantalla así es más pequeño que los píxeles físicos reales
+        # disponibles -> la imagen sale borrosa/con menos detalle del que
+        # la pantalla podría mostrar. Generamos el pixmap ya a resolución
+        # física y le indicamos su devicePixelRatio para que Qt lo pinte
+        # nítido al tamaño lógico correcto.
+        dpr = self.image_view.devicePixelRatioF() or 1.0
+
         box_w, box_h = self.image_view.width(), self.image_view.height()
         if box_w <= 0 or box_h <= 0 or phys_w <= 0 or phys_h <= 0:
+            fallback_size = self.image_view.size()
             scaled = pixmap.scaled(
-                self.image_view.size(),
+                max(1, round(fallback_size.width() * dpr)),
+                max(1, round(fallback_size.height() * dpr)),
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
             )
@@ -229,21 +298,28 @@ class _PlaneView(QWidget):
             target_w = max(1, int(target_w * self.zoom))
             target_h = max(1, int(target_h * self.zoom))
             scaled = pixmap.scaled(
-                target_w, target_h,
+                max(1, round(target_w * dpr)),
+                max(1, round(target_h * dpr)),
                 Qt.AspectRatioMode.IgnoreAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
             )
+        scaled.setDevicePixelRatio(dpr)
 
         if cross_u is not None and cross_v is not None:
             scaled = QPixmap(scaled)  # copia independiente para poder pintar encima
+            scaled.setDevicePixelRatio(dpr)
             painter = QPainter(scaled)
             pen = QPen(QColor(CROSSHAIR_COLOR))
-            pen.setWidth(1)
+            pen.setWidth(max(1, round(dpr)))
             painter.setPen(pen)
-            x = int(max(0, min(cross_u, 1.0)) * scaled.width())
-            y = int(max(0, min(cross_v, 1.0)) * scaled.height())
-            painter.drawLine(x, 0, x, scaled.height())
-            painter.drawLine(0, y, scaled.width(), y)
+            # Coordenadas en píxeles lógicos: al haber fijado
+            # setDevicePixelRatio, QPainter ya trabaja en ese espacio.
+            logical_w = scaled.width() / dpr
+            logical_h = scaled.height() / dpr
+            x = int(max(0, min(cross_u, 1.0)) * logical_w)
+            y = int(max(0, min(cross_v, 1.0)) * logical_h)
+            painter.drawLine(x, 0, x, int(logical_h))
+            painter.drawLine(0, y, int(logical_w), y)
             painter.end()
 
         self.image_view.set_display_pixmap(scaled)
@@ -296,6 +372,26 @@ class DicomViewer(QWidget):
         self.axial_view.doubleClicked.connect(lambda: self._toggle_maximize("axial"))
         self.sagittal_view.doubleClicked.connect(lambda: self._toggle_maximize("sagittal"))
         self.coronal_view.doubleClicked.connect(lambda: self._toggle_maximize("coronal"))
+
+        # -- Barra de herramientas: restablecer zoom/pan y mostrar/ocultar
+        # la retícula de referencia cruzada -------------------------------
+        self._show_guides = True
+
+        self.btn_reset_view = QPushButton("Restablecer vista", self)
+        self.btn_reset_view.setToolTip("Vuelve el zoom y el desplazamiento (pan) de las tres vistas a su estado original")
+        self.btn_reset_view.clicked.connect(self._reset_views)
+
+        self.btn_toggle_guides = QPushButton("Ocultar guías", self)
+        self.btn_toggle_guides.setCheckable(True)
+        self.btn_toggle_guides.setToolTip("Muestra u oculta la retícula de referencia cruzada")
+        self.btn_toggle_guides.toggled.connect(self._on_toggle_guides)
+
+        toolbar = QHBoxLayout()
+        toolbar.setContentsMargins(0, 0, 0, 0)
+        toolbar.addWidget(self.btn_reset_view)
+        toolbar.addWidget(self.btn_toggle_guides)
+        toolbar.addStretch(1)
+        self._toolbar = toolbar
 
         # Ventana / nivel compartida entre las tres vistas.
         self._wl_center = 0.0
@@ -370,11 +466,17 @@ class DicomViewer(QWidget):
         views_widget = QWidget(self)
         views_widget.setLayout(self.views_grid)
 
-        outer = QHBoxLayout(self)
-        outer.setContentsMargins(4, 4, 4, 4)
-        outer.setSpacing(4)
-        outer.addWidget(views_widget, stretch=1)
-        outer.addWidget(side_widget)
+        content = QHBoxLayout()
+        content.setContentsMargins(0, 0, 0, 0)
+        content.setSpacing(4)
+        content.addWidget(views_widget, stretch=1)
+        content.addWidget(side_widget)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(4, 4, 4, 4)
+        root.setSpacing(4)
+        root.addLayout(self._toolbar)
+        root.addLayout(content, stretch=1)
 
         self._render_all()
 
@@ -403,6 +505,21 @@ class DicomViewer(QWidget):
         return self._wl_center - self._wl_width / 2, self._wl_center + self._wl_width / 2
 
     # ------------------------------------------------------------------
+    # Barra de herramientas: restablecer vista y guías
+    # ------------------------------------------------------------------
+    def _reset_views(self):
+        """Vuelve el zoom y el pan de las tres vistas a su estado original."""
+        for view in (self.axial_view, self.sagittal_view, self.coronal_view):
+            view.zoom = 1.0
+            view.image_view.reset_pan()
+        self._render_all()
+
+    def _on_toggle_guides(self, checked: bool):
+        self._show_guides = not checked
+        self.btn_toggle_guides.setText("Mostrar guías" if checked else "Ocultar guías")
+        self._render_all()
+
+    # ------------------------------------------------------------------
     # Pantalla completa de una vista dentro del visor
     # ------------------------------------------------------------------
     def _toggle_maximize(self, name: str):
@@ -423,6 +540,12 @@ class DicomViewer(QWidget):
                 if key != name:
                     widget.hide()
             self._maximized = name
+
+        # El tamaño de las vistas cambia drásticamente al maximizar o
+        # restaurar; reiniciamos el pan para que la imagen no quede
+        # descentrada fuera de la vista.
+        for view in (self.axial_view, self.sagittal_view, self.coronal_view):
+            view.image_view.reset_pan()
 
         self._render_all()
 
@@ -460,8 +583,8 @@ class DicomViewer(QWidget):
         arr = self.volume.axial(z)
         low, high = self._window_bounds()
         w, h = self.volume.axial_physical_size()
-        cross_u = self.sagittal_view.slider.value() / max(n_x - 1, 1)
-        cross_v = self.coronal_view.slider.value() / max(n_y - 1, 1)
+        cross_u = self.sagittal_view.slider.value() / max(n_x - 1, 1) if self._show_guides else None
+        cross_v = self.coronal_view.slider.value() / max(n_y - 1, 1) if self._show_guides else None
         self.axial_view.set_pixmap_from_array(arr, low, high, w, h, cross_u, cross_v)
         self.axial_view.info_label.setText(f"Z: {z + 1} / {n_z}")
 
@@ -471,9 +594,12 @@ class DicomViewer(QWidget):
         arr = self.volume.sagittal(x)
         low, high = self._window_bounds()
         w, h = self.volume.sagittal_physical_size()
-        cross_u = self.coronal_view.slider.value() / max(n_y - 1, 1)
-        # eje Z invertido en esta vista -> la posición vertical va al revés
-        cross_v = 1.0 - (self.axial_view.slider.value() / max(n_z - 1, 1))
+        if self._show_guides:
+            cross_u = self.coronal_view.slider.value() / max(n_y - 1, 1)
+            # eje Z invertido en esta vista -> la posición vertical va al revés
+            cross_v = 1.0 - (self.axial_view.slider.value() / max(n_z - 1, 1))
+        else:
+            cross_u = cross_v = None
         self.sagittal_view.set_pixmap_from_array(arr, low, high, w, h, cross_u, cross_v)
         self.sagittal_view.info_label.setText(f"X: {x + 1} / {n_x}")
 
@@ -483,8 +609,11 @@ class DicomViewer(QWidget):
         arr = self.volume.coronal(y)
         low, high = self._window_bounds()
         w, h = self.volume.coronal_physical_size()
-        cross_u = self.sagittal_view.slider.value() / max(n_x - 1, 1)
-        cross_v = 1.0 - (self.axial_view.slider.value() / max(n_z - 1, 1))
+        if self._show_guides:
+            cross_u = self.sagittal_view.slider.value() / max(n_x - 1, 1)
+            cross_v = 1.0 - (self.axial_view.slider.value() / max(n_z - 1, 1))
+        else:
+            cross_u = cross_v = None
         self.coronal_view.set_pixmap_from_array(arr, low, high, w, h, cross_u, cross_v)
         self.coronal_view.info_label.setText(f"Y: {y + 1} / {n_y}")
 
