@@ -328,10 +328,11 @@ class _PlaneView(QWidget):
 class DicomViewer(QWidget):
     """Widget de una pestaña: vista MPR completa al estilo Slicer."""
 
-    def __init__(self, file_paths: list[str], parent=None):
+    def __init__(self, file_paths: list[str], parent=None, volume: Volume | None = None):
         super().__init__(parent)
         self.setStyleSheet(_DARK_STYLESHEET)
-        self.volume: Volume | None = load_volume(file_paths)
+        # `volume` ya leído (en un hilo, desde preview_window) evita bloquear la interfaz.
+        self.volume: Volume | None = volume if volume is not None else load_volume(file_paths)
 
         if self.volume is None:
             layout = QVBoxLayout(self)

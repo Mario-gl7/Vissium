@@ -10,9 +10,13 @@ Ejecutar:
 """
 from __future__ import annotations
 
+import logging
+import logging.handlers
+import os
 import sys
+import tempfile
 
-from PySide6.QtCore import QObject, Signal, QThread, QTimer, Qt
+from PySide6.QtCore import QLockFile, QObject, Signal, QThread, QTimer, Qt
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import QApplication, QMessageBox, QSplashScreen
 
@@ -27,6 +31,31 @@ from version import APP_NAME, __version__
 # como confirmación visual de que la app se ha abierto (Vissium no
 # muestra ninguna otra ventana al iniciar: se queda en la bandeja).
 SPLASH_DURATION_MS = 1500
+
+
+def _setup_logging():
+    """
+    Log en %LOCALAPPDATA%\\Vissium\\vissium.log. Con el .exe sin consola no hay
+    otro sitio donde ver los errores (antes se silenciaban con `except: pass`).
+    """
+    base = os.environ.get("LOCALAPPDATA") or tempfile.gettempdir()
+    folder = os.path.join(base, "Vissium")
+    try:
+        os.makedirs(folder, exist_ok=True)
+        handler = logging.handlers.RotatingFileHandler(
+            os.path.join(folder, "vissium.log"), maxBytes=512_000, backupCount=2, encoding="utf-8"
+        )
+    except OSError:
+        return
+    handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    root.addHandler(handler)
+
+    def _excepthook(exc_type, exc, tb):
+        logging.getLogger("vissium").critical("Excepción no controlada", exc_info=(exc_type, exc, tb))
+
+    sys.excepthook = _excepthook
 
 
 def _build_splash_pixmap() -> QPixmap:
@@ -123,8 +152,18 @@ class UpdateController(QObject):
 
 
 def main():
+    _setup_logging()
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
+
+    # Instancia única: dos copias = dos hooks de teclado = cada Espacio abre todo dos veces.
+    lock = QLockFile(os.path.join(tempfile.gettempdir(), "vissium.lock"))
+    if not lock.tryLock(1000):
+        QMessageBox.information(
+            None, APP_NAME,
+            f"{APP_NAME} ya está en ejecución (busca su icono junto al reloj).",
+        )
+        sys.exit(0)
     # Cerrar la ventana de previsualizaciones NO debe cerrar la app:
     # sigue viva en la bandeja, esperando la barra espaciadora.
     app.setQuitOnLastWindowClosed(False)
@@ -179,6 +218,8 @@ def main():
     exit_code = app.exec()
     if listener is not None:
         listener.stop()
+    window.shutdown()
+    lock.unlock()
     sys.exit(exit_code)
 
 

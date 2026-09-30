@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import os
 from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -131,7 +132,10 @@ def _maybe_apply_palette(ds, frame: np.ndarray) -> np.ndarray:
     if photometric != "PALETTE COLOR":
         return frame
     try:
-        from pydicom.pixel_data_handlers.util import apply_color_lut
+        try:
+            from pydicom.pixels import apply_color_lut  # pydicom >= 3.0
+        except ImportError:
+            from pydicom.pixel_data_handlers.util import apply_color_lut
         return apply_color_lut(frame, ds)
     except Exception:
         return frame
@@ -255,7 +259,10 @@ def _frames_from_dataset(ds, path: str, warnings: list[str], base_order: int) ->
                 f"{frame.shape}; se omite."
             )
             continue
-        frame = frame.astype(np.float32) * slope + intercept
+        # Se conserva el tipo entero original cuando no hay reescalado (la mitad
+        # de memoria que float32 en un CBCT de cientos de cortes).
+        if slope != 1.0 or intercept != 0.0 or frame.dtype.kind not in "iu":
+            frame = frame.astype(np.float32) * slope + intercept
 
         ipp = None
         if per_frame_groups is not None and idx < len(per_frame_groups):
@@ -314,14 +321,23 @@ def load_volume(file_paths: list[str]) -> Volume | None:
     chosen_set = set(chosen_paths)
     chosen_paths = [p for p in file_paths if p in chosen_set]
 
-    records: list[_FrameRecord] = []
-    for i, path in enumerate(chosen_paths):
+    def _read_one(item):
+        i, path = item
+        local: list[str] = []
         try:
             ds_full = pydicom.dcmread(path, force=True)
         except Exception as exc:
-            warnings.append(f"{os.path.basename(path)}: no se pudo leer ({exc}); se omite.")
-            continue
-        records.extend(_frames_from_dataset(ds_full, path, warnings, base_order=i))
+            local.append(f"{os.path.basename(path)}: no se pudo leer ({exc}); se omite.")
+            return [], local
+        return _frames_from_dataset(ds_full, path, local, base_order=i), local
+
+    # Lectura/descompresión en paralelo (pool.map conserva el orden).
+    records: list[_FrameRecord] = []
+    workers = max(1, min(8, os.cpu_count() or 4))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        for recs, local in pool.map(_read_one, enumerate(chosen_paths)):
+            records.extend(recs)
+            warnings.extend(local)
 
     if not records:
         return None
@@ -368,6 +384,11 @@ def load_volume(file_paths: list[str]) -> Volume | None:
 
     first_header = headers.get(chosen_paths[0]) if chosen_paths else None
     metadata = _extract_metadata(first_header, n_slices=volume.shape[0])
+
+    # Evita cientos de etiquetas de aviso en la interfaz (una por archivo).
+    if len(warnings) > 10:
+        extra = len(warnings) - 10
+        warnings = warnings[:10] + [f"… y {extra} aviso(s) más del mismo tipo."]
 
     return Volume(
         array=volume,

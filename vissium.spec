@@ -7,12 +7,34 @@
 #
 # El resultado queda en dist/Vissium.exe
 
+from PyInstaller.utils.hooks import collect_submodules, copy_metadata
+
+# pylibjpeg/pydicom localizan los decodificadores mediante metadatos de los
+# paquetes (entry points); sin copiarlos, el .exe no lee DICOM comprimidos
+# aunque funcione con `python main.py`.
+_datas = [("assets", "assets")]
+for _pkg in ("pydicom", "pylibjpeg", "pylibjpeg-libjpeg", "pylibjpeg-openjpeg", "python-gdcm"):
+    try:
+        _datas += copy_metadata(_pkg)
+    except Exception:
+        pass
+
+_hidden = [
+    "pythoncom", "pywintypes", "win32timezone", "win32com.client", "win32process",
+    "keyboard", "vtkmodules.all", "vtkmodules.qt.QVTKRenderWindowInteractor",
+]
+for _mod in ("pylibjpeg", "libjpeg", "openjpeg", "gdcm"):
+    try:
+        _hidden += collect_submodules(_mod)
+    except Exception:
+        pass
+
 a = Analysis(
     ["main.py"],
     pathex=[],
     binaries=[],
-    datas=[("assets", "assets")],
-    hiddenimports=[],
+    datas=_datas,
+    hiddenimports=_hidden,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

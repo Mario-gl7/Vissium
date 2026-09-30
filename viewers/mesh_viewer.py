@@ -75,6 +75,11 @@ class MeshViewer(QWidget):
             return
 
         polydata = reader.GetOutput()
+        if polydata.GetNumberOfPoints() == 0:
+            # VTK no lanza excepción con un archivo corrupto: devuelve una malla vacía.
+            outer.addWidget(QLabel("El archivo no contiene una malla válida (0 vértices).", self))
+            self.vtk_widget = None
+            return
 
         # Normales suaves: evita el aspecto "facetado" de un STL en bruto.
         normals = vtk.vtkPolyDataNormals()
@@ -195,6 +200,16 @@ class MeshViewer(QWidget):
         if self.vtk_widget is not None:
             self.vtk_widget.Initialize()
             self.vtk_widget.Start()
+
+    def shutdown(self):
+        """Libera la ventana de render VTK al cerrar la pestaña (evita fugas de GPU/memoria)."""
+        if self.vtk_widget is not None:
+            try:
+                self.axes_widget.EnabledOff()
+                self.vtk_widget.Finalize()
+            except Exception:
+                pass
+            self.vtk_widget = None
 
     def closeEvent(self, event):
         if self.vtk_widget is not None:
