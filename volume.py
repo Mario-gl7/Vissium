@@ -4,8 +4,9 @@ misma tolerancia que 3D Slicer ante metadatos incompletos y
 estructuras no estándar. En concreto, esto incluye:
 
 - Agrupar los archivos por SeriesInstanceUID: si la selección mezcla
-  varias series (p. ej. una carpeta con más de un estudio), se usa la
-  más numerosa y se avisa de las demás, en vez de mezclarlas o fallar.
+  varias series (p. ej. una carpeta con más de un estudio), se listan en
+  `Volume.series` para poder elegir cuál ver; por defecto se carga la más
+  numerosa. Nunca se mezclan series en un mismo volumen.
 - Separar correctamente imágenes en color (RGB) y archivos
   "multi-frame" (un único archivo con varios cortes dentro) -- esto es
   precisamente lo que causaba el error "too many values to unpack
@@ -36,6 +37,21 @@ import pydicom
 
 
 @dataclass
+class SeriesInfo:
+    """Una serie DICOM dentro de la selección (para el selector de series)."""
+    uid: str
+    number: str                # SeriesNumber como texto ("" si falta)
+    description: str
+    modality: str
+    paths: list[str]           # archivos de la serie, en el orden de la selección
+
+    @property
+    def label(self) -> str:
+        head = f"{self.number} · " if self.number else ""
+        return f"{head}{self.description or 'Sin descripción'} ({len(self.paths)})"
+
+
+@dataclass
 class Volume:
     array: np.ndarray          # shape (n_slices, rows, cols) -> (Z, Y, X)
     row_spacing: float         # mm entre filas (eje Y, dentro del plano)
@@ -44,6 +60,8 @@ class Volume:
     file_paths: list[str]      # rutas de cada corte, en el mismo orden que el eje Z
     metadata: dict[str, str]   # info de paciente/estudio/serie, al estilo Slicer
     warnings: list[str] = field(default_factory=list)  # avisos no bloqueantes
+    series_uid: str = ""                                 # serie que contiene este volumen
+    series: list[SeriesInfo] = field(default_factory=list)  # todas las series de la selección
 
     @property
     def shape(self):
@@ -205,6 +223,30 @@ def _group_by_series(file_paths: list[str]):
     return groups, headers
 
 
+def _series_sort_key(info: SeriesInfo):
+    try:
+        number = int(float(info.number))
+    except ValueError:
+        number = 10**9
+    return (number, info.description.lower(), info.uid)
+
+
+def _series_list(groups: dict[str, list[str]], headers: dict) -> list[SeriesInfo]:
+    """Resumen de cada serie (nº, descripción, modalidad, archivos), ordenado por nº de serie."""
+    items: list[SeriesInfo] = []
+    for uid, paths in groups.items():
+        ds = headers.get(paths[0])
+        items.append(SeriesInfo(
+            uid=uid,
+            number=_tag(ds, "SeriesNumber", ""),
+            description=_tag(ds, "SeriesDescription", ""),
+            modality=_tag(ds, "Modality", ""),
+            paths=list(paths),
+        ))
+    items.sort(key=_series_sort_key)
+    return items
+
+
 def _frames_from_dataset(ds, path: str, warnings: list[str], base_order: int) -> list[_FrameRecord]:
     try:
         pixels = ds.pixel_array
@@ -293,33 +335,36 @@ def _frames_from_dataset(ds, path: str, warnings: list[str], base_order: int) ->
     return records
 
 
-def load_volume(file_paths: list[str]) -> Volume | None:
+def load_volume(
+    file_paths: list[str],
+    series_uid: str | None = None,
+    available: list[SeriesInfo] | None = None,
+) -> Volume | None:
     """
     Lee una lista de archivos DICOM, los agrupa por serie, ordena los
     cortes espacialmente (o con el mejor fallback disponible) y
     construye un volumen 3D. Devuelve None solo si no se ha podido
     extraer ni un solo corte válido.
+
+    - `series_uid`: serie a cargar. Si no se indica (o no existe), la más
+      numerosa.
+    - `available`: lista de series ya calculada (de un `Volume.series`
+      anterior). Evita volver a leer las cabeceras al cambiar de serie.
     """
     warnings: list[str] = []
 
-    groups, headers = _group_by_series(file_paths)
-    if not groups:
+    if available is None:
+        groups, headers = _group_by_series(file_paths)
+        if not groups:
+            return None
+        available = _series_list(groups, headers)
+    if not available:
         return None
 
-    if len(groups) > 1:
-        chosen_uid, chosen_paths = max(groups.items(), key=lambda kv: len(kv[1]))
-        omitted = sum(len(v) for k, v in groups.items() if k != chosen_uid)
-        warnings.append(
-            f"Se han detectado {len(groups)} series DICOM distintas en esta selección; "
-            f"se muestra la más numerosa ({len(chosen_paths)} archivos) y se omiten "
-            f"{omitted} archivo(s) de otra(s) serie(s)."
-        )
-    else:
-        chosen_paths = next(iter(groups.values()))
-
-    # Mantener el orden original de aparición como primer criterio estable.
-    chosen_set = set(chosen_paths)
-    chosen_paths = [p for p in file_paths if p in chosen_set]
+    chosen = next((s for s in available if s.uid == series_uid), None)
+    if chosen is None:
+        chosen = max(available, key=lambda s: len(s.paths))
+    chosen_paths = list(chosen.paths)
 
     def _read_one(item):
         i, path = item
@@ -382,7 +427,7 @@ def load_volume(file_paths: list[str]) -> Volume | None:
     volume = np.stack([r.array for r in records], axis=0)  # (Z, Y, X), siempre 3D
     paths = [r.path for r in records]
 
-    first_header = headers.get(chosen_paths[0]) if chosen_paths else None
+    first_header = _header_only(chosen_paths[0]) if chosen_paths else None
     metadata = _extract_metadata(first_header, n_slices=volume.shape[0])
 
     # Evita cientos de etiquetas de aviso en la interfaz (una por archivo).
@@ -398,6 +443,8 @@ def load_volume(file_paths: list[str]) -> Volume | None:
         file_paths=paths,
         metadata=metadata,
         warnings=warnings,
+        series_uid=chosen.uid,
+        series=available,
     )
 
 

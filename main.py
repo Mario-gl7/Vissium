@@ -155,6 +155,9 @@ def main():
     _setup_logging()
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
+    # Estilo Fusion: hace que la hoja de estilos oscura (theme.py) se vea igual
+    # en cualquier versión de Windows.
+    app.setStyle("Fusion")
 
     # Instancia única: dos copias = dos hooks de teclado = cada Espacio abre todo dos veces.
     lock = QLockFile(os.path.join(tempfile.gettempdir(), "vissium.lock"))

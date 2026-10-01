@@ -20,6 +20,9 @@ Cambios respecto a la versión anterior:
   abrió, se recarga en vez de mostrar la pestaña antigua.
 - Varias selecciones del mismo estudio se abren como una sola serie.
 - Carpetas con varias mallas abren cada una en su pestaña (máx. 5).
+- Interfaz minimalista: tema oscuro (theme.py), pestañas de texto con
+  subrayado y una barra de iconos a la izquierda (explorador manual, guías
+  de cruce y restablecer vista, que actúan sobre la pestaña activa).
 """
 from __future__ import annotations
 
@@ -28,22 +31,25 @@ import os
 import time
 from dataclasses import dataclass, field
 
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import QSize, Qt, QThread, Signal
 from PySide6.QtWidgets import (
-    QApplication,
+    QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
     QSplitter,
     QStatusBar,
     QTabWidget,
+    QToolButton,
+    QVBoxLayout,
     QWidget,
 )
 
 from file_browser import FileBrowser
 from file_types import ContentType, classify_path
 from foreground import bring_window_to_front
-from viewers.dicom_viewer import DicomViewer
+from theme import STYLESHEET, apply_dark_titlebar, icon
+from viewers.dicom_viewer import DicomViewer, wait_for_loaders
 from viewers.mesh_viewer import MeshViewer
 from volume import load_volume
 from version import APP_NAME
@@ -141,6 +147,8 @@ class PreviewWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle(APP_NAME)
         self.resize(1200, 800)
+        self.setStyleSheet(STYLESHEET)
+        self._titlebar_done = False
 
         self.browser = FileBrowser(parent=self)
         self.browser.previewRequested.connect(self.open_preview)
@@ -157,7 +165,38 @@ class PreviewWindow(QMainWindow):
         self.splitter.setStretchFactor(0, 0)
         self.splitter.setStretchFactor(1, 1)
 
-        self.setCentralWidget(self.splitter)
+        # Barra de iconos a la izquierda: actúa sobre la pestaña activa.
+        self.rail = QWidget(self)
+        self.rail.setObjectName("rail")
+        self.rail.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.rail.setFixedWidth(46)
+        rail_layout = QVBoxLayout(self.rail)
+        rail_layout.setContentsMargins(5, 10, 5, 10)
+        rail_layout.setSpacing(8)
+        self.btn_browser = self._rail_button(
+            "folder", "Explorador de archivos manual", checkable=True)
+        self.btn_guides = self._rail_button(
+            "crosshair", "Mostrar u ocultar las guías de cruce", checkable=True)
+        self.btn_reset = self._rail_button("refresh", "Restablecer vista")
+        self.btn_guides.setChecked(True)
+        self.btn_guides.setEnabled(False)
+        self.btn_reset.setEnabled(False)
+        for button in (self.btn_browser, self.btn_guides, self.btn_reset):
+            rail_layout.addWidget(button)
+        rail_layout.addStretch(1)
+
+        self.btn_browser.toggled.connect(self._set_browser_visible)
+        self.btn_guides.toggled.connect(self._on_guides_toggled)
+        self.btn_reset.clicked.connect(self._on_reset_clicked)
+
+        central = QWidget(self)
+        central_layout = QHBoxLayout(central)
+        central_layout.setContentsMargins(0, 0, 0, 0)
+        central_layout.setSpacing(0)
+        central_layout.addWidget(self.rail)
+        central_layout.addWidget(self.splitter, stretch=1)
+
+        self.setCentralWidget(central)
         self.setStatusBar(QStatusBar(self))
         self.show_status(
             f"{APP_NAME} en segundo plano. Selecciona un archivo en el "
@@ -171,10 +210,59 @@ class PreviewWindow(QMainWindow):
         self._workers: list[_OpenWorker] = []
         self._last_request: tuple[tuple, float] = ((), 0.0)
 
+        self.tabs.currentChanged.connect(self._update_rail)
+
+    # ------------------------------------------------------------------
+    # Barra de iconos
+    # ------------------------------------------------------------------
+    def _rail_button(self, icon_name: str, tooltip: str, checkable: bool = False) -> QToolButton:
+        button = QToolButton(self.rail)
+        button.setIcon(icon(icon_name))
+        button.setIconSize(QSize(20, 20))
+        button.setFixedSize(36, 36)
+        button.setToolTip(tooltip)
+        button.setCheckable(checkable)
+        button.setAutoRaise(True)
+        return button
+
+    def _set_browser_visible(self, visible: bool):
+        self.btn_browser.blockSignals(True)
+        self.btn_browser.setChecked(visible)
+        self.btn_browser.blockSignals(False)
+        self.browser.setVisible(visible)
+        if visible:
+            self.splitter.setSizes([320, max(880, self.width() - 320)])
+
+    def _on_guides_toggled(self, checked: bool):
+        widget = self.tabs.currentWidget()
+        if hasattr(widget, "set_guides_visible"):
+            widget.set_guides_visible(checked)
+
+    def _on_reset_clicked(self):
+        action = getattr(self.tabs.currentWidget(), "reset_view", None)
+        if callable(action):
+            action()
+
+    def _update_rail(self, *_):
+        """Habilita los botones según lo que sepa hacer la pestaña activa."""
+        widget = self.tabs.currentWidget()
+        can_guides = bool(getattr(widget, "supports_guides", False))
+        self.btn_guides.setEnabled(can_guides)
+        if can_guides:
+            self.btn_guides.blockSignals(True)
+            self.btn_guides.setChecked(bool(widget.guides_visible))
+            self.btn_guides.blockSignals(False)
+        self.btn_reset.setEnabled(callable(getattr(widget, "reset_view", None)))
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self._titlebar_done:
+            self._titlebar_done = True
+            apply_dark_titlebar(self)
+
     # ------------------------------------------------------------------
     def show_manual_browser(self):
-        self.browser.show()
-        self.splitter.setSizes([320, max(880, self.width() - 320)])
+        self._set_browser_visible(True)
         bring_window_to_front(self)
 
     def open_many_and_show(self, paths: list[str]):
@@ -343,6 +431,7 @@ class PreviewWindow(QMainWindow):
         """Espera a los hilos de carga antes de salir."""
         for worker in list(self._workers):
             worker.wait(3000)
+        wait_for_loaders(3000)
 
     # ------------------------------------------------------------------
     def closeEvent(self, event):

@@ -43,17 +43,24 @@ segundo plano.
 3. Se abre (o se trae al frente, si ya estaba abierta) la ventana de
    Vissium con una pestaña nueva para esa previsualización:
    - **DICOM**: se muestran las tres vistas ortogonales — axial,
-     sagital y coronal — cada una con su propio slider para recorrer
-     los cortes, más controles de ventana/nivel (brillo/contraste)
-     compartidos entre las tres. El espaciado físico real de cada eje
+     sagital y coronal — cada una con su barra de desplazamiento para
+     recorrer los cortes. La cuarta celda de la rejilla es el panel de
+     información: selector de **serie** (si la selección contiene
+     varias, se elige cuál ver), controles de ventana/nivel
+     (brillo/contraste, compartidos entre las tres vistas) y los datos
+     esenciales (paciente, fecha, tamaño, espaciado y nº de cortes). El espaciado físico real de cada eje
      se respeta (importante en CBCT, donde el espaciado entre cortes
      suele ser mucho mayor que dentro del plano: sin esto, las vistas
      sagital/coronal saldrían distorsionadas).
-   - **STL/PLY**: modelo 3D interactivo (arrastra para rotar, rueda
-     para zoom).
-4. Volver a pulsar Espacio sobre algo ya abierto simplemente cambia a
+   - **STL/PLY**: modelo 3D sólido interactivo (arrastra para rotar,
+     rueda para zoom), con sus estadísticas (vértices, triángulos,
+     tamaño) superpuestas en la esquina.
+4. La barra de iconos de la izquierda actúa sobre la pestaña activa:
+   explorador manual, mostrar/ocultar las guías de cruce (DICOM) y
+   restablecer la vista (zoom/pan en DICOM, cámara en STL/PLY).
+5. Volver a pulsar Espacio sobre algo ya abierto simplemente cambia a
    esa pestaña, sin duplicarla.
-5. Cerrar la ventana de Vissium (la "x") NO cierra la aplicación:
+6. Cerrar la ventana de Vissium (la "x") NO cierra la aplicación:
    sigue activa en la bandeja. Para cerrarla de verdad, usa "Salir de
    Vissium" en el menú de la bandeja (clic derecho sobre el icono).
 
@@ -149,10 +156,11 @@ vissium/
   hotkey_listener.py         Hook global de la barra espaciadora, filtrado al Explorador
   file_browser.py            Explorador de archivos propio (solo para el modo de respaldo)
   file_types.py              Detección de tipo: serie DICOM / DICOM suelto / STL / PLY
-  volume.py                  Reconstrucción del volumen 3D y extracción de cortes MPR
+  volume.py                  Reconstrucción del volumen 3D, listado de series y extracción de cortes MPR
+  theme.py                   Tema oscuro minimalista: colores, hoja de estilos e iconos de la barra lateral
   viewers/
-    dicom_viewer.py            Visor MPR (axial + sagital + coronal)
-    mesh_viewer.py              Visor 3D de STL/PLY (VTK)
+    dicom_viewer.py            Visor MPR (axial + sagital + coronal) con panel de información y selector de series
+    mesh_viewer.py              Visor 3D sólido de STL/PLY (VTK)
   assets/
     icon.ico / icon.png        Icono de la app (bandeja del sistema y .exe)
   vissium.spec                Configuración de PyInstaller para compilar el .exe

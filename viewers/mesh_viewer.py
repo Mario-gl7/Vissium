@@ -1,14 +1,13 @@
 """
-Visor 3D de mallas STL/PLY al estilo Meshmixer:
+Visor 3D de mallas STL/PLY de Vissium (interfaz minimalista).
 
-- Fondo con degradado suave (en vez de un negro plano).
-- Sombreado suave con normales calculadas (evita el aspecto "facetado"
-  típico de un STL sin procesar).
-- Barra de herramientas: Sólido / Alambre / Sólido+Aristas, y
-  restablecer cámara.
+- Una sola vista: sólido con sombreado suave (normales calculadas, sin el
+  aspecto "facetado" de un STL en bruto). Ya no hay modos alambre ni aristas.
+- Fondo plano oscuro, sin barra de herramientas: el modelo ocupa toda la pestaña.
 - Gizmo de ejes (orientación) en la esquina inferior izquierda.
-- Panel con estadísticas del modelo: vértices, triángulos, tamaño
-  (caja delimitadora).
+- Estadísticas del modelo (vértices, triángulos, tamaño) superpuestas en la
+  esquina inferior derecha, dibujadas dentro de la propia escena VTK.
+- Restablecer cámara: `reset_view()`, que dispara la barra de iconos de la ventana.
 """
 from __future__ import annotations
 
@@ -16,35 +15,11 @@ import os
 
 import vtk
 from vtkmodules.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
-from PySide6.QtWidgets import (
-    QWidget,
-    QVBoxLayout,
-    QHBoxLayout,
-    QLabel,
-    QPushButton,
-    QGroupBox,
-    QFormLayout,
-    QSizePolicy,
-)
+from PySide6.QtWidgets import QLabel, QSizePolicy, QVBoxLayout, QWidget
 
-PANEL_BG = "#2b2b2b"
-BG_TOP = (0.62, 0.65, 0.72)
-BG_BOTTOM = (0.24, 0.26, 0.32)
-
-_STYLESHEET = f"""
-QWidget {{ background-color: {PANEL_BG}; color: #dddddd; }}
-QGroupBox {{
-    border: 1px solid #444; border-radius: 4px; margin-top: 10px;
-    font-weight: bold; color: #cccccc;
-}}
-QGroupBox::title {{ subcontrol-origin: margin; left: 8px; padding: 0 4px; }}
-QPushButton {{
-    background-color: #3a3a3a; border: 1px solid #555; border-radius: 4px;
-    padding: 5px 10px;
-}}
-QPushButton:checked {{ background-color: #4a7fd6; border-color: #4a7fd6; }}
-QPushButton:hover {{ background-color: #484848; }}
-"""
+# Fondo plano (mismo tono que el resto de la interfaz, ligeramente más claro).
+BG_COLOR = (0.102, 0.102, 0.110)
+STATS_COLOR = (0.55, 0.55, 0.57)
 
 
 def _reader_for(path: str):
@@ -56,14 +31,17 @@ def _reader_for(path: str):
     raise ValueError(f"Extensión de malla no soportada: {ext}")
 
 
+def _fmt_int(value: int) -> str:
+    return f"{value:,}".replace(",", ".")
+
+
 class MeshViewer(QWidget):
-    """Widget de una pestaña: modelo 3D interactivo al estilo Meshmixer."""
+    """Widget de una pestaña: modelo 3D interactivo, a pantalla completa."""
 
     def __init__(self, file_path: str, parent=None):
         super().__init__(parent)
-        self.setStyleSheet(_STYLESHEET)
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(4, 4, 4, 4)
+        outer.setContentsMargins(0, 0, 0, 0)
 
         try:
             reader = _reader_for(file_path)
@@ -99,58 +77,39 @@ class MeshViewer(QWidget):
         self.actor.GetProperty().SetSpecularPower(30)
         self.actor.GetProperty().SetDiffuse(0.85)
 
-        # -- Barra de herramientas -------------------------------------
-        toolbar = QHBoxLayout()
-        self.btn_solid = QPushButton("Sólido", self)
-        self.btn_wireframe = QPushButton("Alambre", self)
-        self.btn_solid_edges = QPushButton("Sólido + Aristas", self)
-        for btn in (self.btn_solid, self.btn_wireframe, self.btn_solid_edges):
-            btn.setCheckable(True)
-        self.btn_solid.setChecked(True)
-        self.btn_solid.clicked.connect(lambda: self._set_render_mode("solid"))
-        self.btn_wireframe.clicked.connect(lambda: self._set_render_mode("wireframe"))
-        self.btn_solid_edges.clicked.connect(lambda: self._set_render_mode("solid_edges"))
-
-        self.btn_reset = QPushButton("Restablecer cámara", self)
-        self.btn_reset.clicked.connect(self._reset_camera)
-
-        toolbar.addWidget(self.btn_solid)
-        toolbar.addWidget(self.btn_wireframe)
-        toolbar.addWidget(self.btn_solid_edges)
-        toolbar.addStretch(1)
-        toolbar.addWidget(self.btn_reset)
-
-        # -- Vista 3D + panel de estadísticas ----------------------------
         self.vtk_widget = QVTKRenderWindowInteractor(self)
         self.vtk_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        outer.addWidget(self.vtk_widget, stretch=1)
 
-        stats_box = QGroupBox("Modelo", self)
-        stats_form = QFormLayout(stats_box)
+        renderer = vtk.vtkRenderer()
+        renderer.SetBackground(*BG_COLOR)
+        renderer.GradientBackgroundOff()
+        renderer.AddActor(self.actor)
+
+        # Estadísticas superpuestas (abajo a la derecha).
         n_points = polydata.GetNumberOfPoints()
         n_cells = polydata.GetNumberOfCells()
         bounds = polydata.GetBounds()  # xmin,xmax,ymin,ymax,zmin,zmax
         size = (bounds[1] - bounds[0], bounds[3] - bounds[2], bounds[5] - bounds[4])
-        stats_form.addRow("Archivo:", QLabel(os.path.basename(file_path), self))
-        stats_form.addRow("Vértices:", QLabel(f"{n_points:,}".replace(",", "."), self))
-        stats_form.addRow("Triángulos:", QLabel(f"{n_cells:,}".replace(",", "."), self))
-        stats_form.addRow(
-            "Tamaño (X,Y,Z):",
-            QLabel(f"{size[0]:.2f} x {size[1]:.2f} x {size[2]:.2f}", self),
+        stats = vtk.vtkTextActor()
+        stats.SetInput(
+            f"{_fmt_int(n_points)} vértices\n"
+            f"{_fmt_int(n_cells)} triángulos\n"
+            f"{size[0]:.2f} x {size[1]:.2f} x {size[2]:.2f}"
         )
-        stats_box.setMaximumWidth(220)
+        stats.GetPositionCoordinate().SetCoordinateSystemToNormalizedViewport()
+        stats.GetPositionCoordinate().SetValue(0.98, 0.03)
+        prop = stats.GetTextProperty()
+        prop.SetFontFamilyToCourier()
+        prop.SetFontSize(13)
+        prop.SetColor(*STATS_COLOR)
+        prop.SetJustificationToRight()
+        prop.SetVerticalJustificationToBottom()
+        prop.SetLineSpacing(1.3)
+        prop.ShadowOff()
+        renderer.AddViewProp(stats)
+        self.stats_actor = stats
 
-        body = QHBoxLayout()
-        body.addWidget(self.vtk_widget, stretch=1)
-        body.addWidget(stats_box)
-
-        outer.addLayout(toolbar)
-        outer.addLayout(body, stretch=1)
-
-        renderer = vtk.vtkRenderer()
-        renderer.SetBackground(*BG_BOTTOM)
-        renderer.SetBackground2(*BG_TOP)
-        renderer.GradientBackgroundOn()
-        renderer.AddActor(self.actor)
         renderer.ResetCamera()
         self.renderer = renderer
 
@@ -170,27 +129,8 @@ class MeshViewer(QWidget):
         self.axes_widget.InteractiveOff()
 
     # ------------------------------------------------------------------
-    def _set_render_mode(self, mode: str):
-        for btn in (self.btn_solid, self.btn_wireframe, self.btn_solid_edges):
-            btn.setChecked(False)
-        prop = self.actor.GetProperty()
-        if mode == "solid":
-            self.btn_solid.setChecked(True)
-            prop.SetRepresentationToSurface()
-            prop.EdgeVisibilityOff()
-        elif mode == "wireframe":
-            self.btn_wireframe.setChecked(True)
-            prop.SetRepresentationToWireframe()
-            prop.EdgeVisibilityOff()
-        elif mode == "solid_edges":
-            self.btn_solid_edges.setChecked(True)
-            prop.SetRepresentationToSurface()
-            prop.EdgeVisibilityOn()
-            prop.SetEdgeColor(0.1, 0.1, 0.1)
-        if self.vtk_widget is not None:
-            self.vtk_widget.GetRenderWindow().Render()
-
-    def _reset_camera(self):
+    def reset_view(self):
+        """Restablece la cámara (lo dispara el botón de la barra de iconos)."""
         if self.vtk_widget is not None:
             self.renderer.ResetCamera()
             self.vtk_widget.GetRenderWindow().Render()
