@@ -13,6 +13,17 @@ Cambios respecto a la versión anterior:
   el mismo SeriesInstanceUID), porque un único corte apenas sirve de vista
   previa.
 - DICOMDIR se ignora (no contiene imagen).
+
+Ampliado para leer "cualquier DICOM":
+- Se reconocen archivos DICOM con CUALQUIER extensión (o sin ella: IM0001,
+  I10, 1.2.840...). Para no leer miles de archivos enteros, se filtra antes
+  con una comprobación de 2 bytes (los DICOM empiezan por el grupo 0008 o
+  0002) y solo entonces se parsea la cabecera.
+- Se descartan por extensión los formatos que seguro no son DICOM
+  (imágenes, documentos, comprimidos...).
+- Se explora hasta 3 niveles de subcarpetas (antes 2), hasta 500 carpetas.
+- Un archivo suelto con marca DICM se acepta aunque no tenga imagen (el
+  visor explicará el motivo en vez de decir "no se reconoce").
 """
 from __future__ import annotations
 
@@ -34,10 +45,22 @@ class ContentType(Enum):
 MESH_EXTENSIONS = {".stl", ".ply"}
 # Extensiones en las que se intenta leer como DICOM aunque falte la marca "DICM".
 _DICOM_EXTENSIONS = {"", ".dcm", ".dicom", ".dic", ".ima"}
+# Extensiones que seguro NO son DICOM (se descartan sin abrir el archivo).
+_NON_DICOM_EXTENSIONS = {
+    ".stl", ".ply", ".obj", ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tif", ".tiff",
+    ".webp", ".svg", ".ico", ".txt", ".md", ".pdf", ".xml", ".json", ".csv", ".log",
+    ".ini", ".cfg", ".exe", ".dll", ".zip", ".7z", ".rar", ".gz", ".tar", ".html",
+    ".htm", ".py", ".bat", ".lnk", ".db", ".docx", ".xlsx", ".pptx", ".mp4", ".avi",
+    ".mov", ".nii", ".mha", ".nrrd",
+}
 _SKIP_NAMES = {"dicomdir"}
 
-_MAX_DEPTH = 2        # niveles de subcarpetas a explorar
-_MAX_SUBDIRS = 300    # tope de subcarpetas escaneadas (evita recorrer discos enteros)
+# Los DICOM (con o sin preámbulo) empiezan por el grupo 0008 o 0002, en
+# little o big endian. El grupo 0000 solo se admite con extensión DICOM típica.
+_START_BYTES = {b"\x08\x00", b"\x02\x00", b"\x00\x08", b"\x00\x02"}
+
+_MAX_DEPTH = 3        # niveles de subcarpetas a explorar
+_MAX_SUBDIRS = 500    # tope de subcarpetas escaneadas (evita recorrer discos enteros)
 
 
 def _natural_key(path: str):
@@ -54,14 +77,34 @@ def _has_dicm_magic(path: str) -> bool:
         return False
 
 
+def _looks_like_dicom_start(path: str, ext: str) -> bool:
+    """Filtro barato (2 bytes) para archivos sin marca DICM."""
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(2)
+    except OSError:
+        return False
+    if head in _START_BYTES:
+        return True
+    return head == b"\x00\x00" and ext in _DICOM_EXTENSIONS
+
+
 def _is_dicom_file(path: str) -> bool:
-    """Rápido: marca DICM; si falta, solo se prueba en extensiones típicas."""
+    """
+    Rápido: marca DICM. Si falta (DICOM sin preámbulo), se admite cualquier
+    extensión que no sea claramente de otro formato, previo filtro de 2 bytes
+    y comprobación de que la cabecera tiene imagen (Rows/Columns).
+    """
     name = os.path.basename(path)
     if name.lower() in _SKIP_NAMES:
         return False
+    ext = os.path.splitext(name)[1].lower()
+    if ext in _NON_DICOM_EXTENSIONS:
+        return False
     if _has_dicm_magic(path):
         return True
-    if os.path.splitext(name)[1].lower() not in _DICOM_EXTENSIONS:
+    # Extensiones DICOM explícitas se intentan siempre; el resto pasan el filtro de bytes.
+    if ext not in (".dcm", ".dicom", ".dic", ".ima") and not _looks_like_dicom_start(path, ext):
         return False
     try:
         ds = pydicom.dcmread(path, stop_before_pixels=True, force=True)
@@ -171,6 +214,9 @@ def classify_path(path: str) -> tuple[ContentType, list[str]]:
             return ContentType.MESH, [path]
         if _is_dicom_file(path):
             return ContentType.DICOM_FILE, _series_files(path)
+        if _has_dicm_magic(path) and os.path.basename(path).lower() not in _SKIP_NAMES:
+            # DICOM sin imagen (SR, RT...): el visor explicará por qué no hay nada que mostrar.
+            return ContentType.DICOM_FILE, [path]
         return ContentType.UNKNOWN, []
 
     return ContentType.UNKNOWN, []

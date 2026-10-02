@@ -14,6 +14,10 @@ Visor MPR de DICOM de Vissium (interfaz minimalista).
 - Rueda del ratón: avanza/retrocede cortes. Botón derecho + arrastrar: zoom.
   Botón central + arrastrar: desplazar (pan). Doble clic: maximizar la vista.
 - Respeta el espaciado físico real de cada eje (importante en CBCT).
+- Imágenes 2D (radiografía, panorámica, ecografía): se muestra solo la vista
+  principal, grande, junto al panel de información (sin sagital/coronal vacíos).
+- Ventana/nivel inicial tomada de las etiquetas DICOM cuando son coherentes
+  con los datos; si no, de los percentiles de la imagen.
 - Las acciones globales (guías, restablecer vista) las dispara la barra de
   iconos de la ventana mediante `set_guides_visible()` y `reset_view()`.
 """
@@ -44,7 +48,7 @@ from theme import (
     TEXT_MUTED,
     WARNING,
 )
-from volume import SeriesInfo, Volume, load_volume
+from volume import DicomLoadError, SeriesInfo, Volume, load_volume
 
 log = logging.getLogger("vissium.dicom")
 
@@ -61,7 +65,7 @@ _running_loaders: set = set()
 
 
 class _SeriesLoader(QThread):
-    loaded = Signal(int, object)  # (id_de_petición, Volume | None)
+    loaded = Signal(int, object, str)  # (id_de_petición, Volume | None, motivo del fallo)
 
     def __init__(self, request_id: int, file_paths: list[str], series_uid: str,
                  available: list[SeriesInfo]):
@@ -72,12 +76,15 @@ class _SeriesLoader(QThread):
         self._available = available
 
     def run(self):
+        error = ""
         try:
             volume = load_volume(self._file_paths, self._series_uid, self._available)
-        except Exception:
+        except DicomLoadError as exc:
+            volume, error = None, str(exc)
+        except Exception as exc:
             log.exception("Error leyendo la serie %s", self._series_uid)
-            volume = None
-        self.loaded.emit(self.request_id, volume)
+            volume, error = None, str(exc)
+        self.loaded.emit(self.request_id, volume, error)
 
 
 def _loader_done(loader: _SeriesLoader):
@@ -505,14 +512,21 @@ class DicomViewer(QWidget):
         self._request_id = 0
         self._all_paths = list(file_paths)
         # `volume` ya leído (en un hilo, desde preview_window) evita bloquear la interfaz.
-        self.volume: Volume | None = volume if volume is not None else load_volume(file_paths)
+        self._single_mode: bool | None = None   # diseño actual: imagen 2D o MPR
+        reason = ""
+        if volume is None:
+            try:
+                volume = load_volume(file_paths)
+            except Exception as exc:
+                log.exception("Error leyendo el DICOM")
+                reason = str(exc)
+        self.volume: Volume | None = volume
 
         if self.volume is None:
             layout = QVBoxLayout(self)
-            layout.addWidget(QLabel(
-                "No se han podido leer imágenes DICOM válidas o compatibles "
-                "entre sí (dimensiones distintas) en esta selección.", self
-            ))
+            message = QLabel(reason or "No se han podido leer imágenes DICOM válidas en esta selección.", self)
+            message.setWordWrap(True)
+            layout.addWidget(message)
             return
 
         self._series: list[SeriesInfo] = list(self.volume.series)
@@ -575,7 +589,7 @@ class DicomViewer(QWidget):
     # ------------------------------------------------------------------
     @property
     def supports_guides(self) -> bool:
-        return self.volume is not None
+        return self.volume is not None and not self.volume.is_single_image
 
     @property
     def guides_visible(self) -> bool:
@@ -608,6 +622,7 @@ class DicomViewer(QWidget):
         """Pone `volume` en las tres vistas (alta inicial o cambio de serie)."""
         self.volume = volume
         n_z, n_y, n_x = volume.shape
+        self._relayout()
         for view, count in (
             (self.axial_view, n_z),
             (self.sagittal_view, n_x),
@@ -657,13 +672,13 @@ class DicomViewer(QWidget):
         _running_loaders.add(loader)
         loader.start()
 
-    def _on_series_loaded(self, request_id: int, volume):
+    def _on_series_loaded(self, request_id: int, volume, error: str = ""):
         if request_id != self._request_id:
             return  # petición antigua o pestaña cerrada
         self.info_panel.set_loading(False)
         if volume is None:
             self.info_panel.select_series(self._current_series_index())
-            self.info_panel.set_warnings(["No se pudo leer esa serie."])
+            self.info_panel.set_warnings([error or "No se pudo leer esa serie."])
             return
         self._apply_volume(volume)
         self.info_panel.select_series(self._current_series_index())
@@ -674,6 +689,13 @@ class DicomViewer(QWidget):
         p_low, p_high = np.percentile(sample, [1, 99])
         self._wl_center = float((p_low + p_high) / 2)
         self._wl_width = float(max(p_high - p_low, 1))
+
+        # Si las etiquetas DICOM traen una ventana y es coherente con los datos
+        # (se solapa con el rango real de la imagen), se usa; si no, percentiles.
+        tag_c, tag_w = self.volume.window_center, self.volume.window_width
+        if tag_c is not None and tag_w is not None and tag_w >= 1:
+            if tag_c + tag_w / 2 > p_low and tag_c - tag_w / 2 < p_high:
+                self._wl_center, self._wl_width = float(tag_c), float(tag_w)
 
         level_slider = self.info_panel.level_slider
         width_slider = self.info_panel.width_slider
@@ -710,6 +732,8 @@ class DicomViewer(QWidget):
     # Pantalla completa de una vista dentro del visor
     # ------------------------------------------------------------------
     def _toggle_maximize(self, name: str):
+        if self._single_mode:
+            return  # imagen 2D: ya ocupa todo el espacio
         # Quitar todo de la rejilla antes de recolocar.
         for widget, *_ in self._plane_positions.values():
             self.views_grid.removeWidget(widget)
@@ -759,8 +783,39 @@ class DicomViewer(QWidget):
         self.axial_view.slider.setValue(int(np.clip(z_idx, 0, n_z - 1)))
 
     # ------------------------------------------------------------------
+    def _is_single(self) -> bool:
+        return self.volume is not None and self.volume.is_single_image
+
+    def _relayout(self):
+        """Diseño según el contenido: MPR 2x2, o una sola imagen 2D con el panel al lado."""
+        single = self._is_single()
+        if single == self._single_mode:
+            return
+        self._single_mode = single
+        self._maximized = None
+        for widget, *_ in self._plane_positions.values():
+            self.views_grid.removeWidget(widget)
+        if single:
+            self.sagittal_view.hide()
+            self.coronal_view.hide()
+            self.axial_view.show()
+            self.info_panel.show()
+            self.views_grid.addWidget(self.axial_view, 0, 0, 2, 1)
+            self.views_grid.addWidget(self.info_panel, 0, 1, 2, 1)
+            self.views_grid.setColumnStretch(0, 3)
+            self.views_grid.setColumnStretch(1, 1)
+        else:
+            for widget, row, col, rspan, cspan in self._plane_positions.values():
+                self.views_grid.addWidget(widget, row, col, rspan, cspan)
+                widget.show()
+            self.views_grid.setColumnStretch(0, 1)
+            self.views_grid.setColumnStretch(1, 1)
+        self.axial_view.slider.setVisible(not single)
+
     def _render_all(self):
         self._render_axial()
+        if self._is_single():
+            return
         self._render_sagittal()
         self._render_coronal()
 
@@ -770,12 +825,15 @@ class DicomViewer(QWidget):
         arr = self.volume.axial(z)
         low, high = self._window_bounds()
         w, h = self.volume.axial_physical_size()
-        cross_u = self.sagittal_view.slider.value() / max(n_x - 1, 1) if self._show_guides else None
-        cross_v = self.coronal_view.slider.value() / max(n_y - 1, 1) if self._show_guides else None
+        guides = self._show_guides and not self._is_single()
+        cross_u = self.sagittal_view.slider.value() / max(n_x - 1, 1) if guides else None
+        cross_v = self.coronal_view.slider.value() / max(n_y - 1, 1) if guides else None
         self.axial_view.set_pixmap_from_array(arr, low, high, w, h, cross_u, cross_v)
         self.axial_view.count_label.setText(f"{z + 1} / {n_z}")
 
     def _render_sagittal(self):
+        if self._is_single():
+            return
         n_z, n_y, n_x = self.volume.shape
         x = self.sagittal_view.slider.value()
         arr = self.volume.sagittal(x)
@@ -791,6 +849,8 @@ class DicomViewer(QWidget):
         self.sagittal_view.count_label.setText(f"{x + 1} / {n_x}")
 
     def _render_coronal(self):
+        if self._is_single():
+            return
         n_z, n_y, n_x = self.volume.shape
         y = self.coronal_view.slider.value()
         arr = self.volume.coronal(y)

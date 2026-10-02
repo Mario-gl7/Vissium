@@ -13,7 +13,7 @@ from PyInstaller.utils.hooks import collect_submodules, copy_metadata
 # paquetes (entry points); sin copiarlos, el .exe no lee DICOM comprimidos
 # aunque funcione con `python main.py`.
 _datas = [("assets", "assets")]
-for _pkg in ("pydicom", "pylibjpeg", "pylibjpeg-libjpeg", "pylibjpeg-openjpeg", "python-gdcm"):
+for _pkg in ("pydicom", "pylibjpeg", "pylibjpeg-libjpeg", "pylibjpeg-openjpeg", "pylibjpeg-rle", "python-gdcm"):
     try:
         _datas += copy_metadata(_pkg)
     except Exception:
@@ -23,7 +23,9 @@ _hidden = [
     "pythoncom", "pywintypes", "win32timezone", "win32com.client", "win32process",
     "keyboard", "vtkmodules.all", "vtkmodules.qt.QVTKRenderWindowInteractor",
 ]
-for _mod in ("pylibjpeg", "libjpeg", "openjpeg", "gdcm"):
+# "pydicom" completo: en pydicom 3 los decodificadores de píxeles se cargan por
+# importación dinámica y PyInstaller no los detecta por sí solo.
+for _mod in ("pydicom", "pylibjpeg", "libjpeg", "openjpeg", "rle", "gdcm"):
     try:
         _hidden += collect_submodules(_mod)
     except Exception:
