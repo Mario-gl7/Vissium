@@ -16,7 +16,7 @@ El actualizador (updater.py) compara este número con el de la última
 Release publicada en GitHub (la de `master`) para saber si hay una
 versión nueva disponible.
 """
-__version__ = "1.1.2"
+__version__ = "1.1.3"
 
 APP_NAME = "Vissium"
 
