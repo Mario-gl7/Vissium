@@ -15,22 +15,27 @@ import logging.handlers
 import os
 import sys
 import tempfile
+import time
 
 from PySide6.QtCore import QLockFile, QObject, Signal, QThread, QTimer, Qt
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QApplication, QMessageBox, QSplashScreen
 
 from paths import resource_path
-from preview_window import PreviewWindow
+from theme import BG, LINE, TEXT, app_icon
 from tray import build_tray_icon
 from hotkey_listener import start_hotkey_listener, IS_WINDOWS
 from updater import check_for_update, apply_update, UpdateInfo
 from version import APP_NAME, __version__
 
-# Cuánto tiempo se mantiene visible la pantalla de carga al arrancar,
+# Tiempo mínimo que se mantiene visible la pantalla de carga al arrancar,
 # como confirmación visual de que la app se ha abierto (Vissium no
 # muestra ninguna otra ventana al iniciar: se queda en la bandeja).
-SPLASH_DURATION_MS = 1500
+# Se cuenta desde que el splash aparece, no desde que termina la carga.
+SPLASH_MIN_MS = 1500
+
+SPLASH_SIZE = (300, 340)   # ancho, alto del lienzo del splash
+SPLASH_ICON = 200          # lado del icono dentro del splash
 
 
 def _setup_logging():
@@ -59,20 +64,37 @@ def _setup_logging():
 
 
 def _build_splash_pixmap() -> QPixmap:
-    """Icono de la app ampliado, para usarlo como pantalla de carga."""
+    """
+    Lienzo oscuro con el icono arriba y una franja libre abajo para el texto
+    "Iniciando...": así el mensaje ya no se dibuja encima del icono.
+    """
+    width, height = SPLASH_SIZE
+    canvas = QPixmap(width, height)
+    canvas.fill(QColor(BG))
+
+    painter = QPainter(canvas)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+
+    icon = QPixmap()
     for name in ("icon.png", "icon.ico"):
-        pixmap = QPixmap(resource_path("assets", name))
-        if not pixmap.isNull():
-            return pixmap.scaled(
-                160, 160,
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-    # Si no hay icono empaquetado (p. ej. en desarrollo), un lienzo
-    # simple deja igualmente sitio para el mensaje de carga.
-    pixmap = QPixmap(160, 160)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    return pixmap
+        icon = QPixmap(resource_path("assets", name))
+        if not icon.isNull():
+            break
+    if not icon.isNull():
+        icon = icon.scaled(
+            SPLASH_ICON, SPLASH_ICON,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        painter.drawPixmap((width - icon.width()) // 2, 28, icon)
+
+    pen = QPen(QColor(LINE))
+    pen.setWidth(1)
+    painter.setPen(pen)
+    painter.drawRect(0, 0, width - 1, height - 1)
+    painter.end()
+    return canvas
 
 
 class _HotkeyBridge(QObject):
@@ -158,6 +180,7 @@ def main():
     # Estilo Fusion: hace que la hoja de estilos oscura (theme.py) se vea igual
     # en cualquier versión de Windows.
     app.setStyle("Fusion")
+    app.setWindowIcon(app_icon())
 
     # Instancia única: dos copias = dos hooks de teclado = cada Espacio abre todo dos veces.
     lock = QLockFile(os.path.join(tempfile.gettempdir(), "vissium.lock"))
@@ -173,15 +196,22 @@ def main():
 
     # Pantalla de carga: confirma visualmente que la app se ha abierto,
     # ya que al arrancar no se muestra ninguna otra ventana (se queda
-    # en la bandeja). Se cierra sola pasado SPLASH_DURATION_MS.
-    splash = QSplashScreen(_build_splash_pixmap())
+    # en la bandeja). Se muestra ANTES de importar los módulos pesados
+    # (VTK, pydicom...): antes se importaban al principio del archivo y el
+    # splash aparecía tarde, o ya cerrado, o no llegaba a verse.
+    splash = QSplashScreen(_build_splash_pixmap(), Qt.WindowType.WindowStaysOnTopHint)
+    splash.show()
     splash.showMessage(
         f"Iniciando {APP_NAME}…",
         Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignHCenter,
-        Qt.GlobalColor.white,
+        QColor(TEXT),
     )
-    splash.show()
+    splash.raise_()
+    splash.repaint()
     app.processEvents()  # pinta el splash ya, antes de seguir con el arranque
+    splash_shown_at = time.monotonic()
+
+    from preview_window import PreviewWindow  # importa VTK/pydicom: tarda
 
     window = PreviewWindow()
 
@@ -211,7 +241,8 @@ def main():
             "menú de la bandeja.",
         )
 
-    QTimer.singleShot(SPLASH_DURATION_MS, splash.close)
+    elapsed_ms = int((time.monotonic() - splash_shown_at) * 1000)
+    QTimer.singleShot(max(0, SPLASH_MIN_MS - elapsed_ms), splash.close)
 
     # Comprobación silenciosa al arrancar: si no hay nada nuevo, no se
     # molesta al usuario con ningún aviso; si hay una versión nueva, se

@@ -32,6 +32,7 @@ import time
 from dataclasses import dataclass, field
 
 from PySide6.QtCore import QSize, Qt, QThread, Signal
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -48,7 +49,7 @@ from PySide6.QtWidgets import (
 from file_browser import FileBrowser
 from file_types import ContentType, classify_path
 from foreground import bring_window_to_front
-from theme import STYLESHEET, apply_dark_titlebar, icon
+from theme import STYLESHEET, app_icon, apply_dark_titlebar, icon
 from viewers.dicom_viewer import DicomViewer, wait_for_loaders
 from viewers.mesh_viewer import MeshViewer
 from volume import load_volume
@@ -146,6 +147,7 @@ class PreviewWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle(APP_NAME)
+        self.setWindowIcon(app_icon())
         self.resize(1200, 800)
         self.setStyleSheet(STYLESHEET)
         self._titlebar_done = False
@@ -157,6 +159,7 @@ class PreviewWindow(QMainWindow):
 
         self.tabs = QTabWidget(self)
         self.tabs.setTabsClosable(True)
+        self.tabs.setIconSize(QSize(20, 20))
         self.tabs.tabCloseRequested.connect(self._close_tab)
 
         self.splitter = QSplitter(Qt.Orientation.Horizontal, self)
@@ -373,12 +376,14 @@ class PreviewWindow(QMainWindow):
                     widget.setWordWrap(True)
                 else:
                     widget = DicomViewer(job.files, parent=self.tabs, volume=job.volume)
-                title = f"🩻 {job.label}"
+                title = job.label
+                tab_icon = app_icon()   # las pestañas DICOM llevan el icono de Vissium
                 status = (f"DICOM cargado: {job.volume.shape[0]} cortes"
                           if job.volume is not None else "No se pudo leer el DICOM")
             else:
                 widget = MeshViewer(job.files[0], parent=self.tabs)
                 title = f"🧊 {job.label}"
+                tab_icon = QIcon()
                 status = f"Modelo 3D cargado: {job.label}"
         except Exception as exc:
             log.exception("Error creando el visor")
@@ -391,9 +396,9 @@ class PreviewWindow(QMainWindow):
             idx = self.tabs.indexOf(placeholder)
             self.tabs.removeTab(idx)
             placeholder.deleteLater()
-            self.tabs.insertTab(idx, widget, title)
+            self.tabs.insertTab(idx, widget, tab_icon, title)
         else:
-            idx = self.tabs.addTab(widget, title)
+            idx = self.tabs.addTab(widget, tab_icon, title)
         self.tabs.setCurrentIndex(idx)
 
         self._tabs_by_key[job.key] = (widget, sig)

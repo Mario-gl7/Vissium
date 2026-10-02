@@ -26,7 +26,7 @@ from __future__ import annotations
 import logging
 
 import numpy as np
-from PySide6.QtCore import Qt, Signal, QPointF, QThread
+from PySide6.QtCore import Qt, Signal, QPointF, QThread, QTimer
 from PySide6.QtGui import QImage, QPixmap, QPainter, QPen, QColor
 from PySide6.QtWidgets import (
     QComboBox,
@@ -137,6 +137,7 @@ class _ImageView(QLabel):
     wheelScrolled = Signal(int)
     zoomRequested = Signal(float)
     doubleClicked = Signal()
+    resized = Signal()  # el panel tiene ya su tamaño real: hay que reescalar la imagen
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -246,6 +247,7 @@ class _ImageView(QLabel):
         # recalculamos la posición del pixmap ya cargado con el pan actual.
         self._update_pixmap_rect()
         super().resizeEvent(event)
+        self.resized.emit()
 
     # -- Rueda del ratón: avanzar/retroceder cortes ---------------------
     def wheelEvent(self, event):
@@ -261,6 +263,7 @@ class _PlaneView(QWidget):
     pointClicked = Signal(float, float)
     zoomChanged = Signal()
     doubleClicked = Signal()
+    resized = Signal()
 
     def __init__(self, title: str, color: str, parent=None):
         super().__init__(parent)
@@ -286,6 +289,7 @@ class _PlaneView(QWidget):
         self.image_view.wheelScrolled.connect(self._on_wheel)
         self.image_view.zoomRequested.connect(self._on_zoom)
         self.image_view.doubleClicked.connect(self.doubleClicked)
+        self.image_view.resized.connect(self.resized)
 
         self.slider = QSlider(Qt.Orientation.Horizontal, self)
 
@@ -546,6 +550,13 @@ class DicomViewer(QWidget):
         self.axial_view.pointClicked.connect(self._on_axial_clicked)
         self.sagittal_view.pointClicked.connect(self._on_sagittal_clicked)
         self.coronal_view.pointClicked.connect(self._on_coronal_clicked)
+
+        # Cada vista se vuelve a pintar cuando su panel recibe su tamaño real. Antes
+        # la primera imagen se escalaba con el tamaño provisional (aún sin
+        # layout) y salía pequeña hasta mover la rueda del ratón.
+        self.axial_view.resized.connect(self._render_axial)
+        self.sagittal_view.resized.connect(self._render_sagittal)
+        self.coronal_view.resized.connect(self._render_coronal)
 
         self.axial_view.zoomChanged.connect(self._render_axial)
         self.sagittal_view.zoomChanged.connect(self._render_sagittal)
@@ -864,7 +875,9 @@ class DicomViewer(QWidget):
         self.coronal_view.set_pixmap_from_array(arr, low, high, w, h, cross_u, cross_v)
         self.coronal_view.count_label.setText(f"{y + 1} / {n_y}")
 
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
+    def showEvent(self, event):
+        super().showEvent(event)
         if self.volume is not None:
-            self._render_all()
+            # Tras el primer layout: por si algún panel ya tenía su tamaño final
+            # antes de conectar las señales de redimensionado.
+            QTimer.singleShot(0, self._render_all)

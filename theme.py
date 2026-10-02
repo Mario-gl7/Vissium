@@ -15,10 +15,13 @@ empaquetar imágenes ni depender de fuentes de iconos del sistema.
 from __future__ import annotations
 
 import ctypes
+import os
 import sys
 
 from PySide6.QtCore import Qt, QPointF
 from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
+
+from paths import resource_path
 
 IS_WINDOWS = sys.platform.startswith("win")
 
@@ -171,6 +174,30 @@ def icon(name: str) -> QIcon:
     qicon.addPixmap(off, QIcon.Mode.Disabled, QIcon.State.Off)
     qicon.addPixmap(off, QIcon.Mode.Disabled, QIcon.State.On)
     return qicon
+
+
+# -- Icono de la aplicación -------------------------------------------
+_app_icon_cache: QIcon | None = None
+
+
+def app_icon() -> QIcon:
+    """
+    Icono NUEVO de Vissium (assets/vissium_icon.ico|png) para el interior de la app:
+    icono de la ventana y pestañas de los DICOM. El splash, la bandeja y el .exe
+    siguen usando el icono anterior (assets/icon.ico|png). Si falta el nuevo, se
+    usa el anterior; si no hay ninguno, devuelve un QIcon vacío.
+    """
+    global _app_icon_cache
+    if _app_icon_cache is None:
+        _app_icon_cache = QIcon()
+        for name in ("vissium_icon.ico", "vissium_icon.png", "icon.ico", "icon.png"):
+            path = resource_path("assets", name)
+            if os.path.exists(path):
+                candidate = QIcon(path)
+                if not candidate.isNull():
+                    _app_icon_cache = candidate
+                    break
+    return _app_icon_cache
 
 
 # -- Barra de título oscura (Windows) -----------------------------------
