@@ -23,6 +23,18 @@ Cambios respecto a la versión anterior:
 - Interfaz minimalista: tema oscuro (theme.py), pestañas de texto con
   subrayado y una barra de iconos a la izquierda (explorador manual, guías
   de cruce y restablecer vista, que actúan sobre la pestaña activa).
+
+Ampliado:
+- Imágenes (png, jpg, bmp, gif, tif, webp...): pestaña con `ImageViewer`. La
+  primera imagen se lee en el hilo de carga. Una imagen suelta se abre junto a
+  las demás de su carpeta; si se seleccionan varias, se abren juntas en una sola
+  pestaña (en vez de una pestaña por foto).
+- Un DICOM suelto abre todas las series de su carpeta, con la suya elegida. Si
+  la carpeta ya estaba abierta, se cambia a esa serie en la pestaña existente.
+- La firma de una carpeta (para saber si cambió desde que se abrió) ahora mira
+  también el nº de elementos y la fecha más reciente de su contenido directo;
+  antes solo miraba la fecha de la propia carpeta y podía enseñar series viejas.
+- Los avisos de la búsqueda de archivos (límites alcanzados) llegan al visor DICOM.
 """
 from __future__ import annotations
 
@@ -47,10 +59,11 @@ from PySide6.QtWidgets import (
 )
 
 from file_browser import FileBrowser
-from file_types import ContentType, classify_path
+from file_types import ContentType, classify_detailed, is_image_path
 from foreground import bring_window_to_front
 from theme import STYLESHEET, app_icon, apply_dark_titlebar, icon
 from viewers.dicom_viewer import DicomViewer, wait_for_loaders
+from viewers.image_viewer import ImageViewer, read_image
 from viewers.mesh_viewer import MeshViewer
 from volume import load_volume
 from version import APP_NAME
@@ -62,12 +75,31 @@ DUPLICATE_REQUEST_S = 0.8
 
 
 def _signature(path: str) -> tuple:
-    """Firma barata del contenido: cambia si se añaden/quitan/modifican archivos."""
+    """
+    Firma barata del contenido: cambia si se añaden/quitan/modifican archivos.
+    En una carpeta incluye el nº de elementos y la fecha más reciente de su
+    contenido directo (la fecha de la propia carpeta no cambia, en Windows, al
+    modificarse un archivo o una subcarpeta ya existente).
+    """
     try:
         st = os.stat(path)
-        return (st.st_mtime_ns, st.st_size if os.path.isfile(path) else 0)
     except OSError:
         return (0, 0)
+    if not os.path.isdir(path):
+        return (st.st_mtime_ns, st.st_size)
+    count = 0
+    newest = st.st_mtime_ns
+    try:
+        with os.scandir(path) as it:
+            for entry in it:
+                count += 1
+                try:
+                    newest = max(newest, entry.stat().st_mtime_ns)
+                except OSError:
+                    continue
+    except OSError:
+        pass
+    return (newest, count)
 
 
 def _label_of(path: str) -> str:
@@ -76,12 +108,15 @@ def _label_of(path: str) -> str:
 
 @dataclass
 class _Job:
-    kind: str                       # "dicom" | "mesh" | "none" | "skip" | "error"
+    kind: str                       # "dicom" | "mesh" | "image" | "none" | "skip" | "error"
     key: str = ""
     label: str = ""
     files: list = field(default_factory=list)
     volume: object = None
     message: str = ""
+    index: int = 0                  # imagen: posición de la mostrada primero en `files`
+    preferred_uid: str = ""         # DICOM suelto: serie a mostrar
+    image: object = None            # imagen: (QImage | None, error, formato) leído en el hilo
 
 
 class _Placeholder(QLabel):
@@ -104,9 +139,21 @@ class _OpenWorker(QThread):
 
     def run(self):
         seen: set[str] = set()
+        # Varias imágenes seleccionadas a la vez: una sola pestaña con todas ellas.
+        images = [p for p in self.paths if is_image_path(p)]
+        group = images if len(images) > 1 else []
         for req in self.paths:
             try:
-                for job in self._jobs_for(req, seen):
+                if req in group:
+                    if req == group[0]:
+                        label = f"{_label_of(req)} (+{len(group) - 1})"
+                        jobs = [_Job("image", req, label, list(group), index=0,
+                                     image=read_image(req))]
+                    else:
+                        jobs = [_Job(kind="skip", key=req)]
+                else:
+                    jobs = self._jobs_for(req, seen)
+                for job in jobs:
                     self.resultReady.emit(req, job)
             except Exception as exc:
                 log.exception("Error abriendo %s", req)
@@ -114,7 +161,8 @@ class _OpenWorker(QThread):
 
     @staticmethod
     def _jobs_for(req: str, seen: set[str]) -> list[_Job]:
-        ctype, files = classify_path(req)
+        info = classify_detailed(req)
+        ctype, files = info.ctype, info.files
 
         if ctype in (ContentType.DICOM_SERIES, ContentType.DICOM_FILE):
             if ctype == ContentType.DICOM_FILE and len(files) > 1:
@@ -126,9 +174,16 @@ class _OpenWorker(QThread):
                 return [_Job(kind="skip", key=key)]
             seen.add(norm)
             t0 = time.monotonic()
-            volume = load_volume(files)
-            log.info("Serie DICOM %s: %d archivos en %.1f s", key, len(files), time.monotonic() - t0)
-            return [_Job("dicom", key, _label_of(key), files, volume)]
+            volume = load_volume(files, series_uid=info.preferred_uid or None,
+                                 scan_warnings=info.notes)
+            log.info("Serie DICOM %s: %d archivos, %d series en %.1f s",
+                     key, len(files), len(volume.series), time.monotonic() - t0)
+            return [_Job("dicom", key, _label_of(key), files, volume,
+                         preferred_uid=info.preferred_uid)]
+
+        if ctype == ContentType.IMAGE:
+            return [_Job("image", req, _label_of(req), files, index=info.index,
+                         image=read_image(files[info.index]))]
 
         if ctype == ContentType.MESH:
             return [
@@ -140,7 +195,7 @@ class _OpenWorker(QThread):
         if ctype == ContentType.EMPTY_FOLDER:
             return [_Job(kind="none", message="La carpeta está vacía")]
         return [_Job(kind="none",
-                     message="No se reconoce contenido DICOM ni STL/PLY en esa selección")]
+                     message="No se reconoce contenido DICOM, STL/PLY ni imágenes en esa selección")]
 
 
 class PreviewWindow(QMainWindow):
@@ -363,6 +418,9 @@ class PreviewWindow(QMainWindow):
             if placeholder is not None:
                 self._remove_widget(placeholder)
             self.tabs.setCurrentWidget(entry[0])
+            # DICOM suelto de una carpeta ya abierta: se pasa a la serie elegida.
+            if job.preferred_uid and hasattr(entry[0], "select_series_uid"):
+                entry[0].select_series_uid(job.preferred_uid)
             return
         if entry is not None:  # contenido cambiado: cerrar la pestaña antigua
             self._close_widget(entry[0])
@@ -378,8 +436,17 @@ class PreviewWindow(QMainWindow):
                     widget = DicomViewer(job.files, parent=self.tabs, volume=job.volume)
                 title = job.label
                 tab_icon = app_icon()   # las pestañas DICOM llevan el icono de Vissium
-                status = (f"DICOM cargado: {job.volume.shape[0]} cortes"
-                          if job.volume is not None else "No se pudo leer el DICOM")
+                if job.volume is not None:
+                    n_series = len(job.volume.series)
+                    status = (f"DICOM cargado: {job.volume.shape[0]} cortes"
+                              + (f" · {n_series} series" if n_series > 1 else ""))
+                else:
+                    status = "No se pudo leer el DICOM"
+            elif job.kind == "image":
+                widget = ImageViewer(job.files, job.index, parent=self.tabs, first=job.image)
+                title = f"🖼 {job.label}"
+                tab_icon = QIcon()
+                status = f"Imagen cargada: {job.label}"
             else:
                 widget = MeshViewer(job.files[0], parent=self.tabs)
                 title = f"🧊 {job.label}"

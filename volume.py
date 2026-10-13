@@ -29,6 +29,19 @@ estructuras no estándar. En concreto:
 - Si no se puede extraer ninguna imagen se lanza `DicomLoadError` con un
   mensaje que explica el motivo (en vez de devolver None sin más).
 - Se extraen ventana/nivel por defecto de las etiquetas DICOM.
+
+Detección de series:
+- Los archivos repetidos (mismo SOPInstanceUID, p. ej. una copia de seguridad
+  en una subcarpeta) se descartan: antes se confundían con una serie 4D.
+- Los archivos sin SeriesInstanceUID se agrupan por nº de serie y tamaño de
+  imagen (antes se mezclaban todos en una única serie).
+- `SeriesInfo` guarda también paciente, estudio y cabecera: el selector
+  distingue series de estudios/pacientes distintos y los metadatos se leen sin
+  volver a abrir el archivo.
+- Metadatos ampliados: nº de serie, UID de serie/estudio, nº de acceso, ID de
+  estudio, equipo, kVp, mA, protocolo, etc. (`Volume.metadata`).
+- `Volume.scan_warnings`: avisos de la búsqueda de archivos, que se conservan al
+  cambiar de serie.
 """
 from __future__ import annotations
 
@@ -42,6 +55,7 @@ from dataclasses import dataclass, field
 import numpy as np
 import pydicom
 from pydicom.dataset import FileMetaDataset
+from pydicom.multival import MultiValue
 from pydicom.uid import (
     ExplicitVRBigEndian,
     ExplicitVRLittleEndian,
@@ -65,6 +79,10 @@ class SeriesInfo:
     paths: list[str]           # archivos de la serie, en el orden de la selección
     n_images: int = 0          # imágenes/frames totales (un multi-frame cuenta todos)
     localizer: bool = False    # ImageType contiene LOCALIZER
+    study_uid: str = ""
+    patient: str = ""          # PatientName tal cual (con "^")
+    study_date: str = ""       # StudyDate (YYYYMMDD)
+    header: object = field(default=None, repr=False, compare=False)  # cabecera del 1.er archivo
 
     @property
     def label(self) -> str:
@@ -87,6 +105,7 @@ class Volume:
     modality: str = ""
     window_center: float | None = None   # ventana por defecto según las etiquetas DICOM
     window_width: float | None = None
+    scan_warnings: list[str] = field(default_factory=list)  # avisos de la búsqueda (no de la serie)
 
     @property
     def shape(self):
@@ -473,11 +492,13 @@ def _is_image_header(ds) -> bool:
 def _group_by_series(file_paths: list[str]):
     """
     Agrupa por SeriesInstanceUID sin decodificar los píxeles. Los archivos que
-    no son imagen o no se pueden leer se descartan (y se cuentan en `stats`).
+    no son imagen o no se pueden leer se descartan (y se cuentan en `stats`);
+    los repetidos (mismo SOPInstanceUID) también.
     """
     groups: dict[str, list[str]] = defaultdict(list)
     headers: dict[str, "pydicom.Dataset"] = {}
-    stats = {"total": len(file_paths), "non_image": 0, "unreadable": 0}
+    seen_instances: set[tuple] = set()
+    stats = {"total": len(file_paths), "non_image": 0, "unreadable": 0, "duplicates": 0}
 
     workers = max(1, min(8, os.cpu_count() or 4))
     with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -490,7 +511,18 @@ def _group_by_series(file_paths: list[str]):
         if not _is_image_header(ds):
             stats["non_image"] += 1
             continue
-        series_uid = str(getattr(ds, "SeriesInstanceUID", "") or "") or "__sin_serie__"
+        series_uid = str(getattr(ds, "SeriesInstanceUID", "") or "")
+        if not series_uid:
+            # Sin UID de serie: se agrupa por nº de serie y tamaño para no mezclar series distintas.
+            series_uid = (f"__sin_serie__{_tag(ds, 'SeriesNumber', '')}|"
+                          f"{getattr(ds, 'Rows', '')}x{getattr(ds, 'Columns', '')}")
+        sop_uid = str(getattr(ds, "SOPInstanceUID", "") or "")
+        if sop_uid:
+            instance_key = (series_uid, sop_uid)
+            if instance_key in seen_instances:
+                stats["duplicates"] += 1
+                continue
+            seen_instances.add(instance_key)
         groups[series_uid].append(path)
         headers[path] = ds
     return groups, headers, stats
@@ -532,6 +564,10 @@ def _series_list(groups: dict[str, list[str]], headers: dict) -> list[SeriesInfo
             paths=list(paths),
             n_images=n_images,
             localizer="LOCALIZER" in image_type,
+            study_uid=_tag(ds, "StudyInstanceUID", ""),
+            patient=_tag(ds, "PatientName", ""),
+            study_date=_tag(ds, "StudyDate", ""),
+            header=ds,
         ))
     items.sort(key=_series_sort_key)
     return items
@@ -663,6 +699,7 @@ def load_volume(
     file_paths: list[str],
     series_uid: str | None = None,
     available: list[SeriesInfo] | None = None,
+    scan_warnings: list[str] | None = None,
 ) -> Volume:
     """
     Lee una lista de archivos DICOM, los agrupa por serie, ordena los
@@ -674,8 +711,10 @@ def load_volume(
       tenga más imágenes (ignorando localizadores si hay alternativa).
     - `available`: lista de series ya calculada (de un `Volume.series`
       anterior). Evita volver a leer las cabeceras al cambiar de serie.
+    - `scan_warnings`: avisos previos de la búsqueda de archivos (de
+      `classify_detailed` o de un `Volume.scan_warnings` anterior).
     """
-    warnings: list[str] = []
+    warnings: list[str] = list(scan_warnings or [])
 
     if available is None:
         groups, headers, stats = _group_by_series(file_paths)
@@ -684,8 +723,13 @@ def load_volume(
         available = _series_list(groups, headers)
         if stats["non_image"]:
             warnings.append(f"{stats['non_image']} archivo(s) DICOM sin imagen omitidos.")
+        if stats["duplicates"]:
+            warnings.append(f"{stats['duplicates']} archivo(s) repetidos (mismo SOPInstanceUID) omitidos.")
+        if stats["unreadable"]:
+            warnings.append(f"{stats['unreadable']} archivo(s) no se han podido leer como DICOM.")
     if not available:
         raise DicomLoadError("No hay imágenes DICOM que mostrar.")
+    scan_warnings_out = list(warnings)
 
     chosen = next((s for s in available if s.uid == series_uid), None)
     if chosen is None:
@@ -790,7 +834,9 @@ def load_volume(
     volume = _compact_dtype(volume)
     paths = [r.path for r in records]
 
-    first_header = _header_only(chosen_paths[0]) if chosen_paths else None
+    first_header = chosen.header
+    if first_header is None and chosen_paths:
+        first_header = _header_only(chosen_paths[0])
     metadata = _extract_metadata(first_header, n_slices=volume.shape[0])
     win_center, win_width = (None, None) if invert else _window_from_header(first_header)
 
@@ -812,6 +858,7 @@ def load_volume(
         modality=chosen.modality,
         window_center=win_center,
         window_width=win_width,
+        scan_warnings=scan_warnings_out,
     )
 
 
@@ -823,32 +870,92 @@ def _tag(ds, name: str, default: str = "—") -> str:
         value = getattr(ds, name, None)
         if value is None or value == "":
             return default
+        if isinstance(value, MultiValue):
+            text = " / ".join(str(v) for v in value if str(v) != "")
+            return text or default
         return str(value)
     except Exception:
         return default
 
 
+def _first_tag(ds, names: tuple[str, ...], default: str = "—") -> str:
+    """Primer valor no vacío entre varias etiquetas equivalentes."""
+    for name in names:
+        value = _tag(ds, name, "")
+        if value:
+            return value
+    return default
+
+
+def _transfer_syntax_name(ds) -> str:
+    ts = _transfer_syntax(ds)
+    if ts is None:
+        return "—"
+    return str(getattr(ts, "name", None) or ts)
+
+
+def series_labels(series: list[SeriesInfo]) -> list[str]:
+    """
+    Textos del selector de series. Si la selección mezcla estudios o pacientes
+    distintos, cada texto lleva delante el paciente y la fecha del estudio.
+    """
+    multi = len({(s.patient, s.study_uid) for s in series}) > 1
+    labels: list[str] = []
+    for info in series:
+        text = info.label
+        if multi:
+            who = " ".join(info.patient.replace("^", " ").split()) or "Sin nombre"
+            d = info.study_date.strip()
+            date = f"{d[0:4]}-{d[4:6]}-{d[6:8]}" if len(d) == 8 and d.isdigit() else d
+            text = f"{who} · {date} · {text}" if date else f"{who} · {text}"
+        labels.append(text)
+    return labels
+
+
 def _extract_metadata(ds, n_slices: int) -> dict[str, str]:
     """
-    Recoge los campos que Slicer suele mostrar en su panel de
-    información: identificación del paciente, del estudio y de la
-    serie, y parámetros de adquisición.
+    Recoge los campos que Slicer suele mostrar en su panel de información:
+    identificación del paciente, del estudio y de la serie (con su número y
+    UID de referencia), y parámetros de adquisición. Los valores que faltan
+    quedan como "—".
     """
     if ds is None:
         return {"Nº de cortes": str(n_slices)}
     return {
+        # Paciente
         "Paciente": _tag(ds, "PatientName"),
         "ID paciente": _tag(ds, "PatientID"),
         "Sexo": _tag(ds, "PatientSex"),
         "Fecha nacimiento": _tag(ds, "PatientBirthDate"),
+        "Edad": _tag(ds, "PatientAge"),
+        # Estudio
         "Fecha estudio": _tag(ds, "StudyDate"),
+        "Hora estudio": _tag(ds, "StudyTime"),
         "Descripción estudio": _tag(ds, "StudyDescription"),
-        "Descripción serie": _tag(ds, "SeriesDescription"),
+        "ID estudio": _tag(ds, "StudyID"),
+        "Nº de acceso": _tag(ds, "AccessionNumber"),
+        "UID estudio": _tag(ds, "StudyInstanceUID"),
+        "Institución": _tag(ds, "InstitutionName"),
+        # Serie
         "Nº serie": _tag(ds, "SeriesNumber"),
+        "Descripción serie": _tag(ds, "SeriesDescription"),
+        "UID serie": _tag(ds, "SeriesInstanceUID"),
         "Modalidad": _tag(ds, "Modality"),
+        "Parte del cuerpo": _tag(ds, "BodyPartExamined"),
+        "Protocolo": _tag(ds, "ProtocolName"),
+        "Tipo de imagen": _tag(ds, "ImageType"),
+        # Imagen
+        "Nº de cortes": str(n_slices),
+        "Grosor de corte": _tag(ds, "SliceThickness"),
+        "Bits": _first_tag(ds, ("BitsStored", "BitsAllocated")),
+        "Compresión": _transfer_syntax_name(ds),
+        # Equipo y adquisición
         "Fabricante": _tag(ds, "Manufacturer"),
         "Modelo": _tag(ds, "ManufacturerModelName"),
+        "Software": _tag(ds, "SoftwareVersions"),
+        "Estación": _tag(ds, "StationName"),
         "KVP": _tag(ds, "KVP"),
-        "Nº de cortes": str(n_slices),
-        "Institución": _tag(ds, "InstitutionName"),
+        "mA": _first_tag(ds, ("XRayTubeCurrent", "XRayTubeCurrentInmA")),
+        "Exposición (mAs)": _tag(ds, "Exposure"),
+        "Tiempo exposición (ms)": _tag(ds, "ExposureTime"),
     }

@@ -37,8 +37,8 @@ segundo plano.
 ## Uso
 
 1. Abre el Explorador de Windows con normalidad y navega hasta una
-   carpeta con una serie DICOM, un archivo DICOM suelto, o un archivo
-   `.stl`/`.ply`.
+   carpeta con una serie DICOM, un archivo DICOM suelto, un archivo
+   `.stl`/`.ply` o una imagen (`.png`, `.jpg`, ...).
 2. Selecciona el archivo o la carpeta y pulsa **Espacio**.
 3. Se abre (o se trae al frente, si ya estaba abierta) la ventana de
    Vissium con una pestaña nueva para esa previsualización:
@@ -46,15 +46,21 @@ segundo plano.
      sagital y coronal — cada una con su barra de desplazamiento para
      recorrer los cortes. La cuarta celda de la rejilla es el panel de
      información: selector de **serie** (si la selección contiene
-     varias, se elige cuál ver), controles de ventana/nivel
-     (brillo/contraste, compartidos entre las tres vistas) y los datos
-     esenciales (paciente, fecha, tamaño, espaciado y nº de cortes). El espaciado físico real de cada eje
+     varias, se elige cuál ver; se detectan también las de subcarpetas
+     y, al abrir un DICOM suelto, todas las de su carpeta), los **avisos**
+     de lectura, controles de ventana/nivel (brillo/contraste,
+     compartidos entre las tres vistas) y los datos del estudio con
+     scroll: paciente, estudio (nº de acceso), serie (nº y UID de
+     referencia), imagen y equipo (doble clic sobre un valor lo copia). El espaciado físico real de cada eje
      se respeta (importante en CBCT, donde el espaciado entre cortes
      suele ser mucho mayor que dentro del plano: sin esto, las vistas
      sagital/coronal saldrían distorsionadas).
    - **STL/PLY**: modelo 3D sólido interactivo (arrastra para rotar,
      rueda para zoom), con sus estadísticas (vértices, triángulos,
      tamaño) superpuestas en la esquina.
+   - **Imágenes** (PNG, JPG, BMP, GIF, TIFF, WEBP, ICO): se ajustan a
+     la ventana; rueda = zoom, arrastrar = desplazar, doble clic =
+     ajustar/100 %, flechas = imagen anterior/siguiente de la carpeta.
 4. La barra de iconos de la izquierda actúa sobre la pestaña activa:
    explorador manual, mostrar/ocultar las guías de cruce (DICOM) y
    restablecer la vista (zoom/pan en DICOM, cámara en STL/PLY).
@@ -155,12 +161,13 @@ vissium/
   explorer_integration.py    Obtiene la selección activa del Explorador de Windows (COM)
   hotkey_listener.py         Hook global de la barra espaciadora, filtrado al Explorador
   file_browser.py            Explorador de archivos propio (solo para el modo de respaldo)
-  file_types.py              Detección de tipo: serie DICOM / DICOM suelto / STL / PLY
+  file_types.py              Detección de tipo: serie DICOM / DICOM suelto / STL / PLY / imagen
   volume.py                  Reconstrucción del volumen 3D, listado de series y extracción de cortes MPR
   theme.py                   Tema oscuro minimalista: colores, hoja de estilos e iconos de la barra lateral
   viewers/
     dicom_viewer.py            Visor MPR (axial + sagital + coronal) con panel de información y selector de series
     mesh_viewer.py              Visor 3D sólido de STL/PLY (VTK)
+    image_viewer.py             Visor de imágenes (PNG, JPG, ...) con zoom, desplazamiento y navegación
   assets/
     icon.ico / icon.png        Icono de la app (bandeja del sistema y .exe)
   vissium.spec                Configuración de PyInstaller para compilar el .exe

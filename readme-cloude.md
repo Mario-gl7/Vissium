@@ -6,7 +6,73 @@ modifica cualquier archivo del proyecto (lo más reciente, arriba).
 ## Estructura del proyecto (resumen)
 
 Ver `README.md`. Rutas relevantes: raíz (`main.py`, `volume.py`, `file_types.py`,
-`preview_window.py`, ...) y `viewers/` (`dicom_viewer.py`, `mesh_viewer.py`).
+`preview_window.py`, ...) y `viewers/` (`dicom_viewer.py`, `mesh_viewer.py`,
+`image_viewer.py`).
+
+## 2026-10-13 — Series que no se detectaban, avisos junto a la info, más datos del CBCT e imágenes
+
+Archivos modificados: `file_types.py`, `volume.py`, `viewers/dicom_viewer.py`,
+`preview_window.py`, `viewers/image_viewer.py` (nuevo), `README.md`,
+`readme-cloude.md`.
+
+### Por qué a veces no se detectaban series (file_types.py / volume.py)
+- Solo se exploraban 3 niveles de subcarpetas y se paraba en el primer nivel con
+  algo. Las exportaciones tipo CD/PACS (`DICOM/PAT/STD/SER/IMG`) tienen los
+  archivos a 4+ niveles: el código antiguo devolvía "no se reconoce" (comprobado
+  con datos sintéticos). Ahora hasta 8 niveles.
+- Con subcarpetas solo se usaba la subcarpeta con MÁS archivos y se perdía el
+  resto de series. Ahora se reúnen los DICOM de toda la carpeta y subcarpetas, y
+  `load_volume` los agrupa por SeriesInstanceUID: el selector muestra todas.
+- Un DICOM suelto solo cargaba los de su misma serie. Ahora carga todos los de su
+  carpeta y abre la suya (`Classification.preferred_uid`). Si esa carpeta ya está
+  abierta en una pestaña, se cambia a esa serie en la misma pestaña
+  (`DicomViewer.select_series_uid`).
+- Archivos repetidos (mismo SOPInstanceUID, p. ej. copia en `backup/`) se
+  descartan y se avisa; antes se tomaban por una serie 4D.
+- Archivos sin SeriesInstanceUID: se agrupan por nº de serie y tamaño (antes todos
+  en una única serie).
+- Series de estudios/pacientes distintos: el selector antepone paciente y fecha.
+- La firma de carpeta de `preview_window._signature` mira ahora nº de elementos y
+  fecha más reciente del contenido directo (antes solo la fecha de la carpeta, y
+  podía enseñar una pestaña con series antiguas).
+- Límites de búsqueda (2000 carpetas, 30000 archivos, 20 s): si se alcanzan, se
+  avisa en el panel en vez de cortar en silencio.
+- Nuevo `file_types.classify_detailed()` (devuelve `Classification`);
+  `classify_path()` se conserva como envoltorio.
+- `load_volume(..., scan_warnings=...)`; nuevo `Volume.scan_warnings`;
+  `SeriesInfo` guarda paciente, estudio y cabecera.
+
+### Panel de información del visor DICOM (viewers/dicom_viewer.py)
+- Los avisos ya se ven dentro del panel (bajo el selector de serie), no solo en
+  un tooltip.
+- Más datos, agrupados y con scroll: Paciente (nombre, ID, sexo, nacimiento,
+  edad), Estudio (fecha/hora, descripción, ID, nº de acceso, UID, institución),
+  Serie (nº de serie, descripción, UID de serie, modalidad, parte del cuerpo,
+  protocolo, tipo de imagen), Imagen (tamaño, espaciado, campo de visión
+  calculado, cortes, grosor, bits, compresión) y Equipo (fabricante, modelo,
+  software, estación, kVp, mA, exposición). Los campos vacíos se ocultan.
+- Doble clic sobre un valor lo copia al portapapeles (útil para los UID).
+- Esto amplía la decisión del 2026-10-01 ("solo paciente, fecha, tamaño,
+  espaciado y cortes"), a petición de Mario.
+
+### Imágenes (viewers/image_viewer.py, file_types.py, preview_window.py)
+- Nuevo visor para png, jpg/jpeg/jpe/jfif, bmp, gif (1.er fotograma), tif/tiff,
+  webp e ico, con orientación EXIF.
+- Rueda = zoom hacia el cursor; arrastrar = desplazar; doble clic = ajustar /
+  100 %; flechas = imagen anterior/siguiente de la carpeta; `0`/`F` ajustar, `1`
+  100 %, `+`/`-` zoom. Botón "restablecer vista" de la barra = ajustar.
+- Una imagen suelta se abre con las demás de su carpeta; varias imágenes
+  seleccionadas a la vez → una sola pestaña. Una carpeta solo con imágenes también
+  abre el visor. Prioridad de carpeta: DICOM > mallas > imágenes.
+- La primera imagen se lee en el hilo de carga (no congela la interfaz).
+
+### Notas
+- Probado con datos sintéticos (exportación tipo CD a 5 niveles, series mezcladas
+  con copia duplicada, DICOM suelto, fotos PNG/JPG, imagen corrupta) y con Qt sin
+  pantalla. No probado en Windows real ni con el .exe: reconstruir con `build.bat`.
+- Sin cambios de versión: sube `version.py` al publicar.
+- `vissium.spec`/`requirements.txt` sin cambios (los formatos de imagen vienen en
+  los plugins de Qt de PySide6).
 
 ## 2026-10-02 — Splash con el icono anterior; icono nuevo solo dentro de la app
 
