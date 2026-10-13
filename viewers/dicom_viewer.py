@@ -5,8 +5,10 @@ Visor MPR de DICOM de Vissium (interfaz minimalista).
   celda, el panel de información. Cada vista lleva su nombre (con el color
   estándar de Slicer: axial rojo, sagital amarillo, coronal verde), el
   número de corte y una barra de desplazamiento fina debajo.
-- Panel de información: selector de serie, ventana/nivel y solo los datos
-  esenciales (paciente, fecha, tamaño, espaciado, nº de cortes).
+- Panel de información (con scroll): selector de serie, avisos, ventana/nivel y
+  los datos del estudio agrupados (paciente, estudio, serie con su nº y UID de
+  referencia, imagen y equipo). Los avisos se muestran dentro del propio panel,
+  no solo en un tooltip. Doble clic sobre un valor lo copia al portapapeles.
 - Selector de series: si la selección contiene varias series DICOM se puede
   elegir cuál ver; la nueva serie se lee en un hilo, sin congelar la interfaz.
 - Retícula de referencia cruzada: clic (o arrastrar con el botón izquierdo)
@@ -24,17 +26,22 @@ Visor MPR de DICOM de Vissium (interfaz minimalista).
 from __future__ import annotations
 
 import logging
+import re
 
 import numpy as np
 from PySide6.QtCore import Qt, Signal, QPointF, QThread, QTimer
 from PySide6.QtGui import QImage, QPixmap, QPainter, QPen, QColor
 from PySide6.QtWidgets import (
+    QApplication,
     QComboBox,
+    QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QScrollArea,
     QSizePolicy,
     QSlider,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
@@ -42,13 +49,14 @@ from PySide6.QtWidgets import (
 from theme import (
     CELL_BG,
     CROSSHAIR,
+    PANEL_BG,
     PLANE_COLORS,
     TEXT,
     TEXT_DIM,
     TEXT_MUTED,
     WARNING,
 )
-from volume import DicomLoadError, SeriesInfo, Volume, load_volume
+from volume import DicomLoadError, SeriesInfo, Volume, load_volume, series_labels
 
 log = logging.getLogger("vissium.dicom")
 
@@ -68,17 +76,19 @@ class _SeriesLoader(QThread):
     loaded = Signal(int, object, str)  # (id_de_petición, Volume | None, motivo del fallo)
 
     def __init__(self, request_id: int, file_paths: list[str], series_uid: str,
-                 available: list[SeriesInfo]):
+                 available: list[SeriesInfo], scan_warnings: list[str] | None = None):
         super().__init__()
         self.request_id = request_id
         self._file_paths = file_paths
         self._series_uid = series_uid
         self._available = available
+        self._scan_warnings = list(scan_warnings or [])
 
     def run(self):
         error = ""
         try:
-            volume = load_volume(self._file_paths, self._series_uid, self._available)
+            volume = load_volume(self._file_paths, self._series_uid, self._available,
+                                 scan_warnings=self._scan_warnings)
         except DicomLoadError as exc:
             volume, error = None, str(exc)
         except Exception as exc:
@@ -116,6 +126,142 @@ def _format_date(value: str) -> str:
 
 def _format_mm(value: float) -> str:
     return f"{value:.3f}".rstrip("0").rstrip(".")
+
+
+def _format_time(value: str) -> str:
+    """HHMMSS[.ffffff] -> HH:MM:SS."""
+    digits = value.strip().split(".")[0]
+    if len(digits) >= 6 and digits[:6].isdigit():
+        return f"{digits[0:2]}:{digits[2:4]}:{digits[4:6]}"
+    return value.strip()
+
+
+def _format_sex(value: str) -> str:
+    return {"M": "Masculino", "F": "Femenino", "O": "Otro"}.get(value.strip().upper(), value.strip())
+
+
+def _format_age(value: str) -> str:
+    """'034Y' -> '34 años' (también D/W/M)."""
+    text = value.strip().upper()
+    if len(text) == 4 and text[:3].isdigit() and text[3] in "DWMY":
+        n = int(text[:3])
+        unit = {"D": "día", "W": "semana", "M": "mes", "Y": "año"}[text[3]]
+        if unit == "mes":
+            return f"{n} {'mes' if n == 1 else 'meses'}"
+        return f"{n} {unit}{'' if n == 1 else 's'}"
+    return value.strip()
+
+
+def _num_text(value: str) -> str:
+    """'90.0' -> '90' (si no es un número, se deja igual)."""
+    try:
+        return f"{float(value):g}"
+    except ValueError:
+        return value.strip()
+
+
+def _soft_wrap(text: str) -> str:
+    """
+    Inserta puntos de ruptura (U+200B) en textos largos sin espacios (UID,
+    números de acceso) para que el panel pueda partirlos en varias líneas.
+    """
+    out = []
+    for token in text.split(" "):
+        if len(token) > 20:
+            token = re.sub(r"([.\-_/:])", "\\1\u200b", token)
+            token = re.sub(r"([^\s\u200b]{24})(?=[^\s\u200b])", "\\1\u200b", token)
+        out.append(token)
+    return " ".join(out)
+
+
+def _build_sections(volume: Volume) -> list[tuple[str, list[tuple[str, str]]]]:
+    """
+    Datos del panel de información agrupados en secciones (título, [(clave, valor)]).
+    Los valores vacíos se omiten, y también las secciones que se quedan sin filas.
+    """
+    m = volume.metadata
+
+    def g(key: str) -> str:
+        value = str(m.get(key, "") or "").strip()
+        return "" if value == "—" else value
+
+    n_z, n_y, n_x = volume.shape
+    single = volume.is_single_image
+    if single:
+        spacing = f"{_format_mm(volume.col_spacing)} × {_format_mm(volume.row_spacing)} mm"
+        fov = f"{n_x * volume.col_spacing:.0f} × {n_y * volume.row_spacing:.0f} mm"
+    else:
+        spacing = (f"{_format_mm(volume.col_spacing)} × {_format_mm(volume.row_spacing)} "
+                   f"× {_format_mm(volume.slice_spacing)} mm")
+        fov = (f"{n_x * volume.col_spacing:.0f} × {n_y * volume.row_spacing:.0f} "
+               f"× {n_z * volume.slice_spacing:.0f} mm")
+
+    date = _format_date(g("Fecha estudio")) if g("Fecha estudio") else ""
+    if date and g("Hora estudio"):
+        date = f"{date}  {_format_time(g('Hora estudio'))}"
+    patient = _format_patient(g("Paciente")) if g("Paciente") else ""
+    exposure = " · ".join(v for v in (
+        f"{_num_text(g('Exposición (mAs)'))} mAs" if g("Exposición (mAs)") else "",
+        f"{_num_text(g('Tiempo exposición (ms)'))} ms" if g("Tiempo exposición (ms)") else "",
+    ) if v)
+
+    sections = [
+        ("Paciente", [
+            ("Nombre", patient),
+            ("ID", g("ID paciente")),
+            ("Sexo", _format_sex(g("Sexo")) if g("Sexo") else ""),
+            ("Nacimiento", _format_date(g("Fecha nacimiento")) if g("Fecha nacimiento") else ""),
+            ("Edad", _format_age(g("Edad")) if g("Edad") else ""),
+        ]),
+        ("Estudio", [
+            ("Fecha", date),
+            ("Descripción", g("Descripción estudio")),
+            ("ID estudio", g("ID estudio")),
+            ("Nº de acceso", g("Nº de acceso")),
+            ("UID estudio", g("UID estudio")),
+            ("Institución", g("Institución")),
+        ]),
+        ("Serie", [
+            ("Nº de serie", g("Nº serie")),
+            ("Descripción", g("Descripción serie")),
+            ("UID de serie", g("UID serie")),
+            ("Modalidad", g("Modalidad")),
+            ("Parte del cuerpo", g("Parte del cuerpo")),
+            ("Protocolo", g("Protocolo")),
+            ("Tipo de imagen", g("Tipo de imagen")),
+        ]),
+        ("Imagen", [
+            ("Tamaño", f"{n_x} × {n_y} px"),
+            ("Espaciado", spacing),
+            ("Campo de visión", fov),
+            ("Cortes", "" if single else str(n_z)),
+            ("Grosor de corte", f"{_num_text(g('Grosor de corte'))} mm" if g("Grosor de corte") else ""),
+            ("Bits", g("Bits")),
+            ("Compresión", g("Compresión")),
+        ]),
+        ("Equipo", [
+            ("Fabricante", g("Fabricante")),
+            ("Modelo", g("Modelo")),
+            ("Software", g("Software")),
+            ("Estación", g("Estación")),
+            ("kVp", _num_text(g("KVP")) if g("KVP") else ""),
+            ("mA", _num_text(g("mA")) if g("mA") else ""),
+            ("Exposición", exposure),
+        ]),
+    ]
+    return [(title, [(k, v) for k, v in rows if v]) for title, rows in sections]
+
+
+def _clear_layout(layout) -> None:
+    """Quita y destruye todos los widgets de un layout (para reconstruirlo)."""
+    while layout.count():
+        item = layout.takeAt(0)
+        widget = item.widget()
+        if widget is not None:
+            widget.setParent(None)
+            widget.deleteLater()
+        elif item.layout() is not None:
+            _clear_layout(item.layout())
 
 
 class _ImageView(QLabel):
@@ -389,10 +535,32 @@ class _PlaneView(QWidget):
         self.image_view.set_display_pixmap(scaled)
 
 
+class _CopyLabel(QLabel):
+    """Valor de una fila del panel: parte los textos largos y se copia con doble clic."""
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(parent)
+        self._full = ""
+        self.setWordWrap(True)
+        self.setStyleSheet(f"color: {TEXT}; font-size: 12px;")
+        self.set_value(text)
+
+    def set_value(self, text: str):
+        self._full = text
+        self.setText(_soft_wrap(text))
+        self.setToolTip(f"{text}\n(doble clic para copiar)" if text else "")
+
+    def mouseDoubleClickEvent(self, event):
+        if self._full:
+            QApplication.clipboard().setText(self._full)
+            QToolTip.showText(event.globalPosition().toPoint(), "Copiado", self)
+        super().mouseDoubleClickEvent(event)
+
+
 class _InfoPanel(QWidget):
     """
-    Cuarta celda de la rejilla: selector de serie, ventana/nivel y datos
-    esenciales del estudio (paciente, fecha, tamaño, espaciado, nº de cortes).
+    Cuarta celda de la rejilla (con scroll vertical): selector de serie, avisos,
+    ventana/nivel y los datos del estudio agrupados por secciones.
     """
 
     seriesSelected = Signal(int)  # índice elegido por el usuario en el selector
@@ -406,52 +574,67 @@ class _InfoPanel(QWidget):
         self.setMinimumSize(0, 0)
         self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
 
-        layout = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        self.scroll = QScrollArea(self)
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll.setStyleSheet(
+            f"QScrollArea {{ background-color: {PANEL_BG}; border: 0; }}"
+            f"QScrollArea > QWidget > QWidget {{ background-color: {PANEL_BG}; }}"
+        )
+        outer.addWidget(self.scroll)
+
+        body = QWidget()
+        layout = QVBoxLayout(body)
         layout.setContentsMargins(12, 10, 12, 10)
         layout.setSpacing(4)
+        self.scroll.setWidget(body)
 
         # -- Serie ------------------------------------------------------
         self.series_heading = self._heading("Serie")
         layout.addWidget(self.series_heading)
-        self.series_combo = QComboBox(self)
+        self.series_combo = QComboBox(body)
         self.series_combo.setSizeAdjustPolicy(
             QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.series_combo.setMinimumContentsLength(12)
         self.series_combo.activated.connect(self.seriesSelected)
         layout.addWidget(self.series_combo)
+
+        # -- Avisos (justo bajo la serie, para que se vean con la información) --
+        self.warn_box = QVBoxLayout()
+        self.warn_box.setContentsMargins(0, 6, 0, 0)
+        self.warn_box.setSpacing(3)
+        layout.addLayout(self.warn_box)
         layout.addSpacing(8)
 
         # -- Ventana / nivel --------------------------------------------
         layout.addWidget(self._heading("Ventana / nivel"))
-        self.level_slider = QSlider(Qt.Orientation.Horizontal, self)
-        self.width_slider = QSlider(Qt.Orientation.Horizontal, self)
+        self.level_slider = QSlider(Qt.Orientation.Horizontal, body)
+        self.width_slider = QSlider(Qt.Orientation.Horizontal, body)
         self.level_value = self._value_label()
         self.width_value = self._value_label()
         layout.addLayout(self._row("Nivel", self.level_value))
         layout.addWidget(self.level_slider)
         layout.addLayout(self._row("Ventana", self.width_value))
         layout.addWidget(self.width_slider)
-        layout.addSpacing(8)
+        layout.addSpacing(4)
 
-        # -- Información ------------------------------------------------
-        layout.addWidget(self._heading("Información"))
-        self._values: dict[str, QLabel] = {}
-        for key in ("Paciente", "Fecha", "Tamaño", "Espaciado", "Cortes"):
-            label = self._value_label()
-            label.setWordWrap(True)
-            self._values[key] = label
-            layout.addLayout(self._row(key, label))
-
-        self.warn_label = QLabel(self)
-        self.warn_label.setStyleSheet(f"color: {WARNING}; font-size: 11px;")
-        self.warn_label.hide()
-        layout.addWidget(self.warn_label)
+        # -- Información (rejilla clave / valor con secciones) -----------
+        self.details = QGridLayout()
+        self.details.setContentsMargins(0, 0, 0, 0)
+        self.details.setHorizontalSpacing(12)
+        self.details.setVerticalSpacing(3)
+        self.details.setColumnStretch(1, 1)
+        layout.addLayout(self.details)
         layout.addStretch(1)
 
     # -- Construcción -----------------------------------------------------
-    def _heading(self, text: str) -> QLabel:
+    def _heading(self, text: str, color: str = TEXT_MUTED) -> QLabel:
         label = QLabel(text, self)
-        label.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 11px;")
+        label.setStyleSheet(f"color: {color}; font-size: 11px;")
         return label
 
     def _value_label(self) -> QLabel:
@@ -489,21 +672,38 @@ class _InfoPanel(QWidget):
         self.series_heading.setText("Serie · cargando…" if loading else "Serie")
         self.series_combo.setEnabled(not loading and self.series_combo.count() > 1)
 
-    def set_metadata(self, patient: str, date: str, size: str, spacing: str, slices: str):
-        self._values["Paciente"].setText(patient)
-        self._values["Fecha"].setText(date)
-        self._values["Tamaño"].setText(size)
-        self._values["Espaciado"].setText(spacing)
-        self._values["Cortes"].setText(slices)
+    def set_details(self, sections: list[tuple[str, list[tuple[str, str]]]]):
+        """Reconstruye la rejilla de información: una cabecera por sección y filas clave/valor."""
+        _clear_layout(self.details)
+        row = 0
+        for title, rows in sections:
+            if not rows:
+                continue
+            heading = self._heading(title.upper())
+            heading.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 10px;")
+            if row > 0:
+                heading.setContentsMargins(0, 10, 0, 0)   # aire sobre cada sección salvo la primera
+            self.details.addWidget(heading, row, 0, 1, 2)
+            row += 1
+            for key, value in rows:
+                key_label = QLabel(key, self)
+                key_label.setStyleSheet(f"color: {TEXT_DIM}; font-size: 12px;")
+                key_label.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+                self.details.addWidget(key_label, row, 0, Qt.AlignmentFlag.AlignTop)
+                self.details.addWidget(_CopyLabel(value, self), row, 1)
+                row += 1
 
     def set_warnings(self, warnings: list[str]):
-        if warnings:
-            count = len(warnings)
-            self.warn_label.setText(f"⚠ {count} aviso" + ("s" if count > 1 else ""))
-            self.warn_label.setToolTip("\n".join(warnings))
-            self.warn_label.show()
-        else:
-            self.warn_label.hide()
+        """Avisos visibles dentro del panel (antes solo había un contador con tooltip)."""
+        _clear_layout(self.warn_box)
+        if not warnings:
+            return
+        self.warn_box.addWidget(self._heading(f"⚠ Avisos ({len(warnings)})", WARNING))
+        for text in warnings:
+            label = QLabel(text, self)
+            label.setWordWrap(True)
+            label.setStyleSheet(f"color: {WARNING}; font-size: 11px;")
+            self.warn_box.addWidget(label)
 
 
 class DicomViewer(QWidget):
@@ -648,15 +848,7 @@ class DicomViewer(QWidget):
 
         self._setup_window_level_defaults()
 
-        metadata = volume.metadata
-        self.info_panel.set_metadata(
-            patient=_format_patient(metadata.get("Paciente", "")),
-            date=_format_date(metadata.get("Fecha estudio", "")),
-            size=f"{n_x} × {n_y} px",
-            spacing=(f"{_format_mm(volume.col_spacing)} × {_format_mm(volume.row_spacing)} "
-                     f"× {_format_mm(volume.slice_spacing)} mm"),
-            slices=str(n_z),
-        )
+        self.info_panel.set_details(_build_sections(volume))
         self.info_panel.set_warnings(volume.warnings)
         self._render_all()
 
@@ -667,7 +859,16 @@ class DicomViewer(QWidget):
         return 0
 
     def _refresh_series_selector(self):
-        self.info_panel.set_series([s.label for s in self._series], self._current_series_index())
+        self.info_panel.set_series(series_labels(self._series), self._current_series_index())
+
+    def select_series_uid(self, uid: str):
+        """Cambia a la serie con ese SeriesInstanceUID (si existe en la selección)."""
+        if self.volume is None or not uid:
+            return
+        for i, info in enumerate(self._series):
+            if info.uid == uid:
+                self._on_series_selected(i)
+                return
 
     def _on_series_selected(self, index: int):
         if index < 0 or index >= len(self._series):
@@ -677,7 +878,8 @@ class DicomViewer(QWidget):
             return
         self._request_id += 1
         self.info_panel.set_loading(True)
-        loader = _SeriesLoader(self._request_id, self._all_paths, uid, self._series)
+        loader = _SeriesLoader(self._request_id, self._all_paths, uid, self._series,
+                               self.volume.scan_warnings)
         loader.loaded.connect(self._on_series_loaded)
         loader.finished.connect(lambda l=loader: _loader_done(l))
         _running_loaders.add(loader)
@@ -689,7 +891,8 @@ class DicomViewer(QWidget):
         self.info_panel.set_loading(False)
         if volume is None:
             self.info_panel.select_series(self._current_series_index())
-            self.info_panel.set_warnings([error or "No se pudo leer esa serie."])
+            self.info_panel.set_warnings(
+                [error or "No se pudo leer esa serie."] + list(self.volume.warnings))
             return
         self._apply_volume(volume)
         self.info_panel.select_series(self._current_series_index())
