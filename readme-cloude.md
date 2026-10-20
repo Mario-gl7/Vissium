@@ -216,3 +216,22 @@ La guía de Vercel es de web: solo se aplicaron las reglas que tienen equivalent
 - No probado aquí (requiere Windows): barra espaciadora global, integración con el
   Explorador, bandeja, barra de título oscura y el renderizado 3D real de VTK con GPU.
 - Sin cambios de versión: sube `version.py` al publicar.
+
+---
+
+## Corrección: error "Failed to load Python DLL" al actualizar (2026-10-20)
+
+### updater.py
+- Causa: el .bat de actualización se lanzaba desde el proceso en marcha y heredaba las
+  variables de entorno de PyInstaller (`_MEIPASS2`, `_PYI_*`). El nuevo .exe intentaba
+  reutilizar la carpeta temporal `_MEI…` del antiguo, ya borrada al cerrarse, y fallaba
+  al cargar `python311.dll`.
+- Solución: `clean_environment()` quita esas variables y activa
+  `PYINSTALLER_RESET_ENVIRONMENT=1`; se usa en el `Popen` y también dentro del .bat.
+  La espera antes de sustituir el .exe pasa de 2 a 3 s.
+- Prueba nueva en `tests/test_app.py` (`test_update_environment_drops_pyinstaller_vars`).
+
+### Notas
+- La corrección solo se aplica desde la versión que la incluya: la actualización desde una
+  versión anterior seguirá fallando una vez. Instala esa versión a mano la primera vez.
+- No probado aquí (requiere Windows): el flujo real de actualización con el .exe empaquetado.

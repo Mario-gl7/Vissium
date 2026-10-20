@@ -66,3 +66,12 @@ def test_close_tab_returns_to_empty_state(qtbot, window, fixtures):
 def test_rail_buttons_have_accessible_names(window):
     for b in (window.btn_browser, window.btn_guides, window.btn_reset):
         assert b.accessibleName()
+
+
+def test_update_environment_drops_pyinstaller_vars():
+    from updater import clean_environment
+    env = clean_environment({"PATH": "x", "_MEIPASS2": r"C:\Temp\_MEI123",
+                             "_PYI_APPLICATION_HOME_DIR": r"C:\Temp\_MEI123"})
+    assert env["PATH"] == "x"
+    assert "_MEIPASS2" not in env and "_PYI_APPLICATION_HOME_DIR" not in env
+    assert env["PYINSTALLER_RESET_ENVIRONMENT"] == "1"

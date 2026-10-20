@@ -110,6 +110,27 @@ def check_for_update() -> Optional[UpdateInfo]:
     )
 
 
+# Variables que PyInstaller (modo un solo archivo) deja en el entorno del proceso en marcha.
+# Si el nuevo .exe las hereda, intenta reutilizar la carpeta temporal `_MEI…` del
+# antiguo, que se borra al cerrarse, y falla con "Failed to load Python DLL".
+_PYINSTALLER_ENV_VARS = (
+    "_MEIPASS2",
+    "_PYI_APPLICATION_HOME_DIR",
+    "_PYI_ARCHIVE_FILE",
+    "_PYI_PARENT_PROCESS_LEVEL",
+    "_PYI_LINUX_PROCESS_NAME",
+)
+
+
+def clean_environment(env: dict | None = None) -> dict:
+    """Copia del entorno sin las variables de PyInstaller, para arrancar un .exe independiente."""
+    clean = dict(os.environ if env is None else env)
+    for name in _PYINSTALLER_ENV_VARS:
+        clean.pop(name, None)
+    clean["PYINSTALLER_RESET_ENVIRONMENT"] = "1"   # PyInstaller >= 6.9: instancia nueva
+    return clean
+
+
 def _download(url: str, destination: str) -> None:
     request = urllib.request.Request(url, headers={"User-Agent": "Vissium-Updater"})
     with urllib.request.urlopen(request, timeout=60) as response, open(destination, "wb") as out:
@@ -128,6 +149,9 @@ def apply_update(info: UpdateInfo) -> bool:
       que: 1) espera a que este proceso termine, 2) renombra el exe
       viejo, 3) coloca el nuevo con el nombre original, 4) lo arranca,
       5) se autodestruye. Después esta función cierra la aplicación.
+    - El .bat y el nuevo .exe se arrancan con el entorno limpio de las
+      variables de PyInstaller; si no, el nuevo .exe busca la carpeta
+      temporal `_MEI…` del antiguo (ya borrada) y falla al cargar python311.dll.
 
     Devuelve True si se ha lanzado el proceso de actualización (la
     app debe cerrarse justo después), False si no se pudo aplicar
@@ -147,10 +171,17 @@ def apply_update(info: UpdateInfo) -> bool:
         return False
 
     bat_path = os.path.join(tempfile.gettempdir(), "vissium_update.bat")
-    # /nobreak /t 2: pequeña espera para que el proceso actual termine
+    # /nobreak /t 3: pequeña espera para que el proceso actual termine
     # de cerrarse antes de tocar su .exe.
+    # Se vacían aquí también las variables de PyInstaller: el .bat las heredaría y
+    # `start` se las pasaría al nuevo .exe (ver `clean_environment`).
     script = f"""@echo off
-timeout /t 2 /nobreak >nul
+set _MEIPASS2=
+set _PYI_APPLICATION_HOME_DIR=
+set _PYI_ARCHIVE_FILE=
+set _PYI_PARENT_PROCESS_LEVEL=
+set PYINSTALLER_RESET_ENVIRONMENT=1
+timeout /t 3 /nobreak >nul
 if exist "{old_backup}" del /f /q "{old_backup}"
 move /y "{current_exe}" "{old_backup}" >nul
 move /y "{new_exe}" "{current_exe}" >nul
@@ -164,5 +195,6 @@ del "%~f0"
         ["cmd", "/c", bat_path],
         creationflags=subprocess.CREATE_NO_WINDOW,  # type: ignore[attr-defined]
         close_fds=True,
+        env=clean_environment(),
     )
     return True
