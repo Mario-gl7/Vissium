@@ -1,19 +1,28 @@
 @echo off
-REM Compila Vissium.exe localmente en Windows.
-REM Requiere que el venv ya exista con las dependencias instaladas
-REM (ver README.md) y añade pyinstaller si falta.
-
+REM Compila Vissium.exe localmente, incluso si se ejecuta desde otro directorio.
 setlocal
-call venv\Scripts\activate.bat || goto :error
+cd /d "%~dp0" || goto :error
 
-pip show pyinstaller >nul 2>nul
+REM Acepta ambos nombres de entorno virtual usados en Windows.
+if exist ".venv\Scripts\python.exe" (
+    set "PYTHON=.venv\Scripts\python.exe"
+) else if exist "venv\Scripts\python.exe" (
+    set "PYTHON=venv\Scripts\python.exe"
+) else (
+    echo No se encuentra .venv ni venv en "%CD%".
+    echo Crea el entorno con: python -m venv .venv
+    echo Instala las dependencias con: .venv\Scripts\python.exe -m pip install -r requirements.txt
+    goto :error
+)
+
+"%PYTHON%" -m pip show pyinstaller >nul 2>nul
 if errorlevel 1 (
     echo Instalando PyInstaller...
-    pip install pyinstaller
+    "%PYTHON%" -m pip install pyinstaller || goto :error
 )
 
 echo Compilando Vissium.exe ...
-pyinstaller vissium.spec --noconfirm
+"%PYTHON%" -m PyInstaller "%~dp0vissium.spec" --noconfirm
 if errorlevel 1 goto :error
 
 echo.

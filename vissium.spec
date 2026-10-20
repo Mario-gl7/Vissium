@@ -33,10 +33,12 @@ for _mod in ("pydicom", "pylibjpeg", "libjpeg", "openjpeg", "rle", "gdcm"):
 
 a = Analysis(
     ["main.py"],
-    pathex=[],
+    # Hace explícitos los módulos de la aplicación junto al spec, incluso
+    # cuando PyInstaller se ejecuta desde otro directorio.
+    pathex=[SPECPATH],
     binaries=[],
     datas=_datas,
-    hiddenimports=_hidden,
+    hiddenimports=_hidden + ["paths"],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
