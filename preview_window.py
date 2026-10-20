@@ -43,7 +43,7 @@ import os
 import time
 from dataclasses import dataclass, field
 
-from PySide6.QtCore import QSize, Qt, QThread, Signal
+from PySide6.QtCore import QFileSystemWatcher, QSize, Qt, QThread, Signal, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QHBoxLayout,
@@ -313,6 +313,16 @@ class PreviewWindow(QMainWindow):
         self._workers: list[_OpenWorker] = []
         self._last_request: tuple[tuple, float] = ((), 0.0)
 
+        # Las vistas guardan los datos leídos en memoria. Vigilar sus rutas
+        # evita que una pestaña siga mostrando contenido después de borrarlo.
+        self._path_watcher = QFileSystemWatcher(self)
+        self._path_watcher.fileChanged.connect(self._on_watched_path_changed)
+        self._path_watcher.directoryChanged.connect(self._on_watched_path_changed)
+        self._watch_refresh = QTimer(self)
+        self._watch_refresh.setSingleShot(True)
+        self._watch_refresh.setInterval(150)
+        self._watch_refresh.timeout.connect(self._refresh_watched_paths)
+
         self.tabs.currentChanged.connect(self._update_rail)
 
     # ------------------------------------------------------------------
@@ -535,7 +545,44 @@ class PreviewWindow(QMainWindow):
 
         if job.kind == "mesh":
             widget.start()
+        self._refresh_watched_paths()
         self.show_status(status)
+
+    def _on_watched_path_changed(self, _path: str):
+        # Windows часто сообщает несколько изменений подряд при удалении.
+        self._watch_refresh.start()
+
+    def _refresh_watched_paths(self):
+        """Vigila claves abiertas y cierra las pestañas cuyo origen desapareció."""
+        existing = set(self._path_watcher.files()) | set(self._path_watcher.directories())
+        wanted: set[str] = set()
+        stale: set[QWidget] = set()
+        for key, (widget, _sig) in list(self._tabs_by_key.items()):
+            if self.tabs.indexOf(widget) < 0:
+                continue
+            if not os.path.exists(key):
+                stale.add(widget)
+                continue
+            # Un cambio de contenido (por ejemplo, borrar un DICOM dentro de
+            # una carpeta abierta) invalida también la vista que quedó en memoria.
+            if _signature(key) != _sig:
+                stale.add(widget)
+                continue
+            # Una ruta inexistente no puede observarse directamente; vigilar
+            # el padre permite detectar si se crea/elimina posteriormente.
+            absolute = os.path.abspath(key)
+            wanted.add(absolute)
+            if not os.path.isdir(key):
+                wanted.add(os.path.dirname(absolute))
+        for widget in stale:
+            self._close_widget(widget)
+        existing_abs = {os.path.abspath(p) for p in existing}
+        remove = [p for p in existing if os.path.abspath(p) not in wanted]
+        add = [p for p in wanted - existing_abs if os.path.exists(p)]
+        if remove:
+            self._path_watcher.removePaths(remove)
+        if add:
+            self._path_watcher.addPaths(add)
 
     # ------------------------------------------------------------------
     def _close_widget(self, widget):

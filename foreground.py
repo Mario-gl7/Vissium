@@ -18,6 +18,11 @@ IS_WINDOWS = sys.platform.startswith("win")
 
 def bring_window_to_front(window):
     """Muestra, sube y enfoca la ventana, superponiéndola a otras apps."""
+    # show() por sí solo no restaura una ventana minimizada en Windows.
+    # showNormal() restaura su tamaño/estado normal y showMaximized() fuerza
+    # el resultado esperado para la hotkey de Vissium.
+    window.showNormal()
+    window.showMaximized()
     window.show()
     window.raise_()
     window.activateWindow()
