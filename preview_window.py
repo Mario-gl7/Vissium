@@ -51,7 +51,9 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QSplitter,
+    QStackedWidget,
     QStatusBar,
+    QTabBar,
     QTabWidget,
     QToolButton,
     QVBoxLayout,
@@ -61,7 +63,7 @@ from PySide6.QtWidgets import (
 from file_browser import FileBrowser
 from file_types import ContentType, classify_detailed, is_image_path
 from foreground import bring_window_to_front
-from theme import STYLESHEET, app_icon, apply_dark_titlebar, icon
+from theme import STYLESHEET, app_icon, apply_dark_titlebar, icon, make_close_button, tab_icon
 from viewers.dicom_viewer import DicomViewer, wait_for_loaders
 from viewers.image_viewer import ImageViewer, read_image
 from viewers.mesh_viewer import MeshViewer
@@ -198,6 +200,44 @@ class _OpenWorker(QThread):
                      message="No se reconoce contenido DICOM, STL/PLY ni imágenes en esa selección")]
 
 
+class _Tabs(QTabWidget):
+    """QTabWidget que avisa cuando cambia el número de pestañas (para la pantalla de bienvenida)."""
+
+    countChanged = Signal()
+
+    def tabInserted(self, index):
+        super().tabInserted(index)
+        self.countChanged.emit()
+
+    def tabRemoved(self, index):
+        super().tabRemoved(index)
+        self.countChanged.emit()
+
+
+class _EmptyState(QWidget):
+    """Pantalla de bienvenida: se ve cuando no hay ninguna pestaña abierta."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("emptyState")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        title = QLabel(APP_NAME, self)
+        title.setObjectName("emptyTitle")
+        hint = QLabel("Selecciona un archivo en el Explorador de Windows y pulsa "
+                      "<span style='font-family:Consolas,monospace;'>Espacio</span>", self)
+        hint.setObjectName("emptyHint")
+        hint.setTextFormat(Qt.TextFormat.RichText)
+        formats = QLabel("DICOM   ·   STL   ·   PLY   ·   PNG   ·   JPG", self)
+        formats.setObjectName("emptyFormats")
+        layout = QVBoxLayout(self)
+        layout.addStretch(1)
+        for label in (title, hint, formats):
+            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            layout.addWidget(label)
+            layout.addSpacing(8)
+        layout.addStretch(2)
+
+
 class PreviewWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -212,14 +252,19 @@ class PreviewWindow(QMainWindow):
         self.browser.statusMessage.connect(self.show_status)
         self.browser.hide()  # el flujo principal es el Explorador de Windows + Espacio
 
-        self.tabs = QTabWidget(self)
-        self.tabs.setTabsClosable(True)
-        self.tabs.setIconSize(QSize(20, 20))
-        self.tabs.tabCloseRequested.connect(self._close_tab)
+        self.tabs = _Tabs(self)
+        self.tabs.setTabsClosable(False)   # el botón de cierre lo dibuja theme.make_close_button
+        self.tabs.setIconSize(QSize(18, 18))
+        self.tabs.countChanged.connect(self._sync_empty_state)
+
+        # Pantalla de bienvenida (0) o pestañas (1).
+        self.stack = QStackedWidget(self)
+        self.stack.addWidget(_EmptyState(self))
+        self.stack.addWidget(self.tabs)
 
         self.splitter = QSplitter(Qt.Orientation.Horizontal, self)
         self.splitter.addWidget(self.browser)
-        self.splitter.addWidget(self.tabs)
+        self.splitter.addWidget(self.stack)
         self.splitter.setStretchFactor(0, 0)
         self.splitter.setStretchFactor(1, 1)
 
@@ -279,6 +324,7 @@ class PreviewWindow(QMainWindow):
         button.setIconSize(QSize(20, 20))
         button.setFixedSize(36, 36)
         button.setToolTip(tooltip)
+        button.setAccessibleName(tooltip)
         button.setCheckable(checkable)
         button.setAutoRaise(True)
         return button
@@ -290,6 +336,21 @@ class PreviewWindow(QMainWindow):
         self.browser.setVisible(visible)
         if visible:
             self.splitter.setSizes([320, max(880, self.width() - 320)])
+
+    def _sync_empty_state(self):
+        self.stack.setCurrentIndex(1 if self.tabs.count() else 0)
+
+    def _add_tab(self, widget, title: str, tab_icon_: QIcon, index: int | None = None) -> int:
+        """Añade/inserta una pestaña con su botón de cierre propio. Devuelve su índice."""
+        if index is None:
+            idx = self.tabs.addTab(widget, tab_icon_, title)
+        else:
+            idx = self.tabs.insertTab(index, widget, tab_icon_, title)
+        self.tabs.tabBar().setTabButton(
+            idx, QTabBar.ButtonPosition.RightSide,
+            make_close_button(lambda _=False, w=widget: self._close_tab(self.tabs.indexOf(w)),
+                              self.tabs.tabBar()))
+        return idx
 
     def _on_guides_toggled(self, checked: bool):
         widget = self.tabs.currentWidget()
@@ -369,7 +430,7 @@ class PreviewWindow(QMainWindow):
                 continue
 
             ph = _Placeholder(path, self.tabs)
-            idx = self.tabs.addTab(ph, f"⏳ {_label_of(path)}")
+            idx = self._add_tab(ph, f"Cargando {_label_of(path)}…", tab_icon("loading"))
             self.tabs.setCurrentIndex(idx)
             self._pending[path] = ph
             todo.append(path)
@@ -435,7 +496,7 @@ class PreviewWindow(QMainWindow):
                 else:
                     widget = DicomViewer(job.files, parent=self.tabs, volume=job.volume)
                 title = job.label
-                tab_icon = app_icon()   # las pestañas DICOM llevan el icono de Vissium
+                tab_ic = app_icon()   # las pestañas DICOM llevan el icono de Vissium
                 if job.volume is not None:
                     n_series = len(job.volume.series)
                     status = (f"DICOM cargado: {job.volume.shape[0]} cortes"
@@ -444,13 +505,13 @@ class PreviewWindow(QMainWindow):
                     status = "No se pudo leer el DICOM"
             elif job.kind == "image":
                 widget = ImageViewer(job.files, job.index, parent=self.tabs, first=job.image)
-                title = f"🖼 {job.label}"
-                tab_icon = QIcon()
+                title = job.label
+                tab_ic = tab_icon("image")
                 status = f"Imagen cargada: {job.label}"
             else:
                 widget = MeshViewer(job.files[0], parent=self.tabs)
-                title = f"🧊 {job.label}"
-                tab_icon = QIcon()
+                title = job.label
+                tab_ic = tab_icon("cube")
                 status = f"Modelo 3D cargado: {job.label}"
         except Exception as exc:
             log.exception("Error creando el visor")
@@ -463,9 +524,9 @@ class PreviewWindow(QMainWindow):
             idx = self.tabs.indexOf(placeholder)
             self.tabs.removeTab(idx)
             placeholder.deleteLater()
-            self.tabs.insertTab(idx, widget, tab_icon, title)
+            idx = self._add_tab(widget, title, tab_ic, index=idx)
         else:
-            idx = self.tabs.addTab(widget, tab_icon, title)
+            idx = self._add_tab(widget, title, tab_ic)
         self.tabs.setCurrentIndex(idx)
 
         self._tabs_by_key[job.key] = (widget, sig)

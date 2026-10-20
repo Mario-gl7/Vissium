@@ -174,3 +174,45 @@ Archivos modificados: `volume.py`, `file_types.py`, `viewers/dicom_viewer.py`,
   píxeles truncados, serie bifásica y el visor en modo 2D/MPR (Qt offscreen).
 - No probado: JPEG2000/JPEG-LS reales, ni el .exe empaquetado (reconstruir con `build.bat`).
 - Sin cambios de versión: sube `version.py` al publicar.
+
+---
+
+## Rediseño de interfaz y auditoría (rama `design-premium`, 2026-10-20)
+
+Referencias usadas: `taste-skill` (criterio estético: sin emojis, acento escaso,
+bordes de 1 px, sombras casi nulas), `awesome-design-md` (Linear/Raycast: superficies
+casi negras, hairlines, un único acento) y `web-interface-guidelines` (auditoría:
+foco visible, nombres accesibles, estados vacíos, "…" en vez de "...").
+La guía de Vercel es de web: solo se aplicaron las reglas que tienen equivalente en Qt.
+
+### theme.py
+- Paleta nueva (`BG`, `LINE`, `LINE_STRONG`, `HOVER_BG`, `ACCENT`...); se mantienen los
+  nombres anteriores, así que los visores no necesitan cambios.
+- Acento `#7b86e8` solo para foco, pestaña activa y asa del deslizador con foco.
+- Estados de foco (`:focus`) en botones de iconos, botones, campos, desplegables y deslizadores.
+- Iconos de línea nuevos: `close`, `image`, `cube`, `loading`, `warning`.
+- `tab_icon(nombre)` y `make_close_button(callback)` (el botón nativo de cierre salía como
+  un cuadrado blanco/rojo con la hoja de estilos).
+- Tipografía: Segoe UI Variable / Segoe UI, 12 px.
+
+### preview_window.py
+- Pestañas sin emojis (antes ⏳ 🖼 🧊): iconos de línea y "Cargando <nombre>…".
+- Botón de cierre propio en cada pestaña (`_add_tab`).
+- Pantalla de bienvenida (`_EmptyState`) cuando no hay pestañas; vuelve al cerrar la última.
+- Nombres accesibles en los botones de la barra de iconos.
+
+### viewers/dicom_viewer.py
+- El encabezado de avisos pierde el símbolo ⚠ ("Avisos (n)").
+
+### tests/ (nuevo)
+- `conftest.py`: DICOM, CD con 2 series, STL y PNG sintéticos; entorno offscreen.
+- `test_app.py`: abrir cada tipo, CD multi-serie en una pestaña, cierre de pestaña,
+  pantalla de bienvenida, sin emojis en títulos, nombres accesibles.
+- Ejecutar: `pip install pytest pytest-qt` y `python -m pytest tests -q`.
+
+### Notas
+- Playwright es para navegadores web, no controla una ventana PySide6; por eso las
+  pruebas usan `pytest-qt` en modo offscreen y capturas con `widget.grab()`.
+- No probado aquí (requiere Windows): barra espaciadora global, integración con el
+  Explorador, bandeja, barra de título oscura y el renderizado 3D real de VTK con GPU.
+- Sin cambios de versión: sube `version.py` al publicar.

@@ -7,7 +7,8 @@ empaquetar imágenes ni depender de fuentes de iconos del sistema.
 
 - `STYLESHEET`: se aplica una sola vez, en la ventana de previsualizaciones;
   los visores heredan el estilo.
-- `icon(nombre)`: icono de línea fina ("folder", "crosshair", "refresh") con
+- `icon(nombre)`: icono de línea fina ("folder", "crosshair", "refresh", "close",
+  "image", "cube", "loading", "warning") con
   estados apagado / activo / deshabilitado.
 - `apply_dark_titlebar(ventana)`: en Windows 10/11 pone oscura la barra de
   título nativa para que case con el resto de la interfaz.
@@ -26,17 +27,23 @@ from paths import resource_path
 IS_WINDOWS = sys.platform.startswith("win")
 
 # -- Paleta ---------------------------------------------------------------
-BG = "#141414"
+# Superficies casi negras con bordes de 1 px (referencia: Linear/Raycast en
+# awesome-design-md) y un único acento, usado solo para foco y selección.
+BG = "#0f1011"
 CELL_BG = "#000000"
-PANEL_BG = "#0c0c0c"
-LINE = "#2a2a2a"
-FIELD_BG = "#1c1c1c"
-TEXT = "#e8e8e8"
-TEXT_DIM = "#9a9a9a"
-TEXT_MUTED = "#6a6a6a"
-ICON_DISABLED = "#3a3a3a"
+PANEL_BG = "#0b0c0d"
+LINE = "#23252a"
+LINE_STRONG = "#34343a"
+FIELD_BG = "#16171a"
+HOVER_BG = "#1a1b1e"
+TEXT = "#ededee"
+TEXT_DIM = "#a0a3aa"
+TEXT_MUTED = "#6f737b"
+ICON_DISABLED = "#3a3c42"
+ACCENT = "#7b86e8"
 CROSSHAIR = "#4fc3f7"
 WARNING = "#e3c34c"
+FONT_STACK = '"Segoe UI Variable Text", "Segoe UI", "Helvetica Neue", Arial, sans-serif'
 
 PLANE_COLORS = {
     "axial": "#e34c4c",
@@ -45,11 +52,11 @@ PLANE_COLORS = {
 }
 
 STYLESHEET = f"""
-QWidget {{ background-color: {BG}; color: {TEXT}; }}
+QWidget {{ background-color: {BG}; color: {TEXT}; font-family: {FONT_STACK}; font-size: 12px; }}
 QLabel {{ background: transparent; }}
 QToolTip {{
-    background-color: #232323; color: {TEXT};
-    border: 1px solid #3a3a3a; padding: 3px 6px;
+    background-color: {HOVER_BG}; color: {TEXT};
+    border: 1px solid {LINE_STRONG}; padding: 4px 8px;
 }}
 
 QSplitter::handle {{ background-color: {LINE}; }}
@@ -59,37 +66,43 @@ QTabWidget::pane {{ border: 0; border-top: 1px solid {LINE}; }}
 QTabBar {{ background: transparent; }}
 QTabBar::tab {{
     background: transparent; color: {TEXT_MUTED};
-    padding: 7px 14px; border: 0; border-bottom: 2px solid transparent;
+    padding: 8px 14px; border: 0; border-bottom: 2px solid transparent;
 }}
-QTabBar::tab:hover {{ color: #c8c8c8; }}
-QTabBar::tab:selected {{ color: {TEXT}; border-bottom: 2px solid {TEXT}; }}
+QTabBar::tab:hover {{ color: {TEXT_DIM}; }}
+QTabBar::tab:selected {{ color: {TEXT}; border-bottom: 2px solid {ACCENT}; }}
 
 QStatusBar {{ color: {TEXT_MUTED}; border-top: 1px solid {LINE}; }}
 QStatusBar::item {{ border: 0; }}
 
 QToolButton {{
-    background: transparent; border: 0; border-radius: 4px; padding: 6px;
+    background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 6px;
 }}
-QToolButton:hover {{ background-color: #232323; }}
+QToolButton:hover {{ background-color: {HOVER_BG}; }}
 QToolButton:checked {{ background-color: {LINE}; }}
+QToolButton:focus {{ border: 1px solid {ACCENT}; }}
+QToolButton#tabClose {{ padding: 2px; border-radius: 4px; }}
+QToolButton#tabClose:hover {{ background-color: {LINE_STRONG}; }}
 
 QPushButton {{
-    background-color: #232323; border: 1px solid #3a3a3a;
-    border-radius: 4px; padding: 5px 14px;
+    background-color: {HOVER_BG}; border: 1px solid {LINE_STRONG};
+    border-radius: 6px; padding: 5px 14px;
 }}
-QPushButton:hover {{ background-color: #2c2c2c; }}
+QPushButton:hover {{ background-color: {LINE}; }}
+QPushButton:focus {{ border: 1px solid {ACCENT}; }}
 
 QLineEdit {{
     background-color: {FIELD_BG}; border: 1px solid {LINE};
-    border-radius: 4px; padding: 4px 6px;
+    border-radius: 6px; padding: 4px 6px;
 }}
+QLineEdit:focus {{ border: 1px solid {ACCENT}; }}
 QTreeView {{ background-color: {BG}; border: 0; }}
 QTreeView::item:selected {{ background-color: {LINE}; color: {TEXT}; }}
 
 QComboBox {{
     background-color: {FIELD_BG}; border: 1px solid {LINE};
-    border-radius: 4px; padding: 4px 8px; color: {TEXT};
+    border-radius: 6px; padding: 4px 8px; color: {TEXT};
 }}
+QComboBox:focus {{ border: 1px solid {ACCENT}; }}
 QComboBox:disabled {{ color: {TEXT_MUTED}; }}
 QComboBox QAbstractItemView {{
     background-color: {FIELD_BG}; color: {TEXT}; border: 1px solid {LINE};
@@ -103,14 +116,15 @@ QSlider::handle:horizontal {{
     background: {TEXT}; width: 10px; height: 10px;
     margin: -4px 0; border-radius: 5px;
 }}
+QSlider::handle:horizontal:focus {{ background: {ACCENT}; }}
 
 QScrollBar:vertical {{ background: {BG}; width: 10px; margin: 0; }}
 QScrollBar::handle:vertical {{
-    background: #333333; border-radius: 5px; min-height: 24px;
+    background: {LINE_STRONG}; border-radius: 5px; min-height: 24px;
 }}
 QScrollBar:horizontal {{ background: {BG}; height: 10px; margin: 0; }}
 QScrollBar::handle:horizontal {{
-    background: #333333; border-radius: 5px; min-width: 24px;
+    background: {LINE_STRONG}; border-radius: 5px; min-width: 24px;
 }}
 QScrollBar::add-line, QScrollBar::sub-line {{ width: 0; height: 0; }}
 QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
@@ -119,6 +133,14 @@ QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
 #dicomRoot {{ background-color: {LINE}; }}
 #planeCell {{ background-color: {CELL_BG}; }}
 #infoCell {{ background-color: {PANEL_BG}; }}
+#emptyState {{ background-color: {BG}; }}
+#emptyTitle {{ font-size: 22px; font-weight: 600; color: {TEXT}; }}
+#emptyHint {{ font-size: 13px; color: {TEXT_DIM}; }}
+#emptyFormats {{ font-size: 11px; color: {TEXT_MUTED}; letter-spacing: 1px; }}
+#kbd {{
+    background-color: {FIELD_BG}; border: 1px solid {LINE_STRONG}; border-radius: 4px;
+    padding: 1px 7px; font-family: "Cascadia Mono", Consolas, monospace; color: {TEXT};
+}}
 """
 
 
@@ -157,8 +179,66 @@ def _draw_icon(name: str, color: str) -> QPixmap:
         tip = QPointF(47.3, 44.9)
         p.drawLine(tip, QPointF(35.7, 48.0))
         p.drawLine(tip, QPointF(46.3, 56.9))
+    elif name == "close":
+        p.drawLine(QPointF(18, 18), QPointF(46, 46))
+        p.drawLine(QPointF(46, 18), QPointF(18, 46))
+    elif name == "image":
+        p.drawRoundedRect(8, 12, 48, 40, 5, 5)
+        p.drawEllipse(QPointF(22, 26), 4, 4)
+        path = QPainterPath()
+        path.moveTo(10, 46)
+        path.lineTo(26, 32)
+        path.lineTo(36, 42)
+        path.lineTo(42, 36)
+        path.lineTo(54, 48)
+        p.drawPath(path)
+    elif name == "cube":
+        path = QPainterPath()
+        path.moveTo(32, 8)
+        path.lineTo(54, 20)
+        path.lineTo(54, 44)
+        path.lineTo(32, 56)
+        path.lineTo(10, 44)
+        path.lineTo(10, 20)
+        path.closeSubpath()
+        p.drawPath(path)
+        p.drawLine(QPointF(10, 20), QPointF(32, 32))
+        p.drawLine(QPointF(54, 20), QPointF(32, 32))
+        p.drawLine(QPointF(32, 32), QPointF(32, 56))
+    elif name == "loading":
+        p.drawArc(14, 14, 36, 36, 60 * 16, 240 * 16)
+    elif name == "warning":
+        path = QPainterPath()
+        path.moveTo(32, 10)
+        path.lineTo(56, 52)
+        path.lineTo(8, 52)
+        path.closeSubpath()
+        p.drawPath(path)
+        p.drawLine(QPointF(32, 25), QPointF(32, 38))
+        p.drawPoint(QPointF(32, 45))
     p.end()
     return pm
+
+
+def tab_icon(name: str) -> QIcon:
+    """Icono pequeño y fijo (sin estados) para las pestañas."""
+    return QIcon(_draw_icon(name, TEXT_DIM))
+
+
+def make_close_button(callback, parent=None):
+    """Botón de cierre de pestaña dibujado por nosotros (el nativo se ve como un cuadrado blanco)."""
+    from PySide6.QtCore import QSize
+    from PySide6.QtWidgets import QToolButton
+    button = QToolButton(parent)
+    button.setObjectName("tabClose")
+    button.setIcon(icon("close"))
+    button.setIconSize(QSize(12, 12))
+    button.setAutoRaise(True)
+    button.setToolTip("Cerrar pestaña")
+    button.setAccessibleName("Cerrar pestaña")
+    button.setCursor(Qt.CursorShape.PointingHandCursor)
+    button.clicked.connect(callback)
+    return button
 
 
 def icon(name: str) -> QIcon:
