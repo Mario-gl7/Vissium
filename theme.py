@@ -14,7 +14,8 @@ depender de fuentes de iconos del sistema.
   los visores heredan el estilo. Los widgets son transparentes por defecto: el
   fondo lo ponen la ventana (`BG`), la tarjeta (`#card`) y cada celda.
 - `icon(nombre)`: icono de línea fina ("folder", "crosshair", "refresh", "close",
-  "image", "cube", "loading", "warning", "layers", "eye", "eye-off") con
+  "image", "cube", "loading", "warning", "layers", "eye", "eye-off",
+  "skull", "minimize", "maximize", "restore", "switch") con
   estados apagado / activo / deshabilitado.
 - `rounded_mask(widget, radio)`: recorta con esquinas redondeadas un widget con
   ventana nativa (el de VTK), que de otro modo se vería con esquinas cuadradas.
@@ -310,6 +311,29 @@ def _draw_icon(name: str, color: str) -> QPixmap:
         p.drawLine(QPointF(35, 39), QPointF(29, 39))
         p.drawLine(QPointF(28, 46), QPointF(28, 51))
         p.drawLine(QPointF(36, 46), QPointF(36, 51))
+    elif name == "minimize":
+        p.drawLine(QPointF(16, 44), QPointF(48, 44))
+    elif name == "maximize":
+        p.drawLine(QPointF(25, 11), QPointF(11, 11))
+        p.drawLine(QPointF(11, 11), QPointF(11, 25))
+        p.drawLine(QPointF(39, 11), QPointF(53, 11))
+        p.drawLine(QPointF(53, 11), QPointF(53, 25))
+        p.drawLine(QPointF(11, 39), QPointF(11, 53))
+        p.drawLine(QPointF(11, 53), QPointF(25, 53))
+        p.drawLine(QPointF(53, 39), QPointF(53, 53))
+        p.drawLine(QPointF(53, 53), QPointF(39, 53))
+    elif name == "restore":
+        p.drawRoundedRect(12, 20, 32, 32, 4, 4)
+        p.drawLine(QPointF(25, 12), QPointF(48, 12))
+        p.drawLine(QPointF(48, 12), QPointF(48, 35))
+        p.drawLine(QPointF(48, 35), QPointF(44, 35))
+    elif name == "switch":
+        p.drawLine(QPointF(10, 22), QPointF(49, 22))
+        p.drawLine(QPointF(49, 22), QPointF(40, 13))
+        p.drawLine(QPointF(49, 22), QPointF(40, 31))
+        p.drawLine(QPointF(54, 42), QPointF(15, 42))
+        p.drawLine(QPointF(15, 42), QPointF(24, 33))
+        p.drawLine(QPointF(15, 42), QPointF(24, 51))
     elif name == "loading":
         p.drawArc(14, 14, 36, 36, 60 * 16, 240 * 16)
     elif name == "warning":

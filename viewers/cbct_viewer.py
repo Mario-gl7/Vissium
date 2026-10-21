@@ -5,7 +5,29 @@ import numpy as np
 import vtk
 from vtkmodules.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
 from vtkmodules.util.numpy_support import numpy_to_vtk
-from PySide6.QtWidgets import QFrame, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QPushButton, QSlider,
+                               QVBoxLayout, QWidget)
+
+
+class _PanZoomStyle(vtk.vtkInteractorStyleTrackballCamera):
+    """Derecho desplaza, rueda acerca y el clic izquierdo no actúa."""
+
+    def OnLeftButtonDown(self):
+        pass
+
+    def OnLeftButtonUp(self):
+        pass
+
+    def OnRightButtonDown(self):
+        interactor = self.GetInteractor()
+        if interactor is not None:
+            self.FindPokedRenderer(*interactor.GetEventPosition())
+        if self.GetCurrentRenderer() is not None:
+            self.StartPan()
+
+    def OnRightButtonUp(self):
+        self.EndPan()
 
 
 class CBCTViewer(QWidget):
@@ -23,6 +45,25 @@ class CBCTViewer(QWidget):
         layout.addWidget(self._vtk_widget)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(8)
+        controls = QHBoxLayout()
+        controls.setContentsMargins(4, 0, 4, 0)
+        controls.setSpacing(10)
+        self.threshold_button = QPushButton("Umbral", self)
+        self.threshold_button.setObjectName("pill")
+        self.threshold_button.setCheckable(True)
+        self.threshold_button.setChecked(True)
+        self.threshold_button.setToolTip("Mostrar u ocultar el ajuste de umbral óseo")
+        self.threshold_slider = QSlider(Qt.Orientation.Horizontal, self)
+        self.threshold_slider.setRange(0, 1000)
+        self.threshold_slider.setToolTip("Ajusta el umbral de intensidad para reducir el ruido")
+        self.threshold_value = QLabel(self)
+        self.threshold_value.setMinimumWidth(56)
+        self.threshold_value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        controls.addWidget(self.threshold_button)
+        controls.addWidget(self.threshold_slider, 1)
+        controls.addWidget(self.threshold_value)
+        outer.addLayout(controls)
         outer.addWidget(frame)
 
         data = np.asarray(volume.array)
@@ -41,11 +82,28 @@ class CBCTViewer(QWidget):
         low = float(np.percentile(values, 25))
         bone = values[values > low]
         threshold = float(np.percentile(bone, 72)) if bone.size else float(values.max())
+        self._threshold_min = float(np.percentile(values, 1))
+        self._threshold_max = float(np.percentile(values, 99.5))
+        if self._threshold_max <= self._threshold_min:
+            self._threshold_max = self._threshold_min + 1.0
+        threshold = float(np.clip(threshold, self._threshold_min, self._threshold_max))
         surface = vtk.vtkFlyingEdges3D()
         surface.SetInputData(image)
         surface.SetValue(0, threshold)
         surface.ComputeGradientsOn()
         surface.ComputeNormalsOff()
+        self._surface = surface
+        self._threshold_current = threshold
+        slider_value = int(round(1000 * (threshold - self._threshold_min)
+                                 / (self._threshold_max - self._threshold_min)))
+        self.threshold_slider.setValue(slider_value)
+        self._update_threshold_label(slider_value)
+        self.threshold_button.toggled.connect(self.threshold_slider.setVisible)
+        self.threshold_slider.valueChanged.connect(self._queue_threshold_update)
+        self._threshold_timer = QTimer(self)
+        self._threshold_timer.setSingleShot(True)
+        self._threshold_timer.setInterval(70)
+        self._threshold_timer.timeout.connect(self._apply_threshold)
 
         smooth = vtk.vtkWindowedSincPolyDataFilter()
         smooth.SetInputConnection(surface.GetOutputPort())
@@ -82,9 +140,30 @@ class CBCTViewer(QWidget):
 
     def start(self):
         if not self._started:
+            self._style = _PanZoomStyle()
+            interactor = self._vtk_widget.GetRenderWindow().GetInteractor()
+            interactor.SetInteractorStyle(self._style)
             self._vtk_widget.Initialize()
             self._vtk_widget.Start()
             self._started = True
+
+    def _update_threshold_label(self, slider_value: int):
+        value = self._threshold_min + (self._threshold_max - self._threshold_min) * slider_value / 1000
+        self.threshold_value.setText(f"{value:.0f}")
+
+    def _queue_threshold_update(self, slider_value: int):
+        self._update_threshold_label(slider_value)
+        self._threshold_timer.start()
+
+    def _apply_threshold(self):
+        value = self._threshold_min + (self._threshold_max - self._threshold_min) * self.threshold_slider.value() / 1000
+        if abs(value - self._threshold_current) < 1e-6:
+            return
+        self._threshold_current = value
+        self._surface.SetValue(0, value)
+        self._surface.Modified()
+        if self._started:
+            self._vtk_widget.GetRenderWindow().Render()
 
     def reset_view(self):
         renderer = self._vtk_widget.GetRenderWindow().GetRenderers().GetFirstRenderer()

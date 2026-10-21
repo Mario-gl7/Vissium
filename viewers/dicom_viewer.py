@@ -29,13 +29,14 @@ import logging
 import re
 
 import numpy as np
-from PySide6.QtCore import Qt, Signal, QPointF, QThread, QTimer
+from PySide6.QtCore import Qt, Signal, QPointF, QThread, QTimer, QSize
 from PySide6.QtGui import QImage, QPixmap, QPainter, QPen, QColor
 from PySide6.QtWidgets import (
     QApplication,
     QComboBox,
     QFrame,
     QGridLayout,
+    QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -55,6 +56,7 @@ from theme import (
     TEXT_DIM,
     TEXT_MUTED,
     WARNING,
+    icon,
 )
 from volume import DicomLoadError, SeriesInfo, Volume, load_volume, series_labels
 from viewers.cbct_viewer import CBCTViewer
@@ -803,6 +805,17 @@ class DicomViewer(QWidget):
         self.studio.setStyleSheet(
             "QFrame#studioPanel { background:#151619; border:1px solid #3b3c42;"
             " border-radius:12px; }"
+            "QFrame#studioPanel[studioMinimized='true'] { background:transparent; border:0; }"
+            "QPushButton#studioTitle { background:transparent; border:0; padding:4px 6px;"
+            " text-align:left; font-weight:600; }"
+            "QFrame#studioPanel[studioMinimized='true'] QPushButton#studioTitle {"
+            " background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #282a2e,stop:1 #1a1b1e);"
+            " border:1px solid #4b4d54; border-bottom:2px solid #090a0b;"
+            " border-radius:12px; padding:8px 12px; text-align:center; color:#f2f2f3; }"
+            "QFrame#studioPanel[studioMinimized='true'] QPushButton#studioTitle:hover {"
+            " border-color:#70727a; color:#ffffff; }"
+            "QFrame#studioPanel[studioMinimized='true'] QPushButton#studioTitle:pressed {"
+            " background:#17181b; border-bottom:1px solid #090a0b; padding-top:9px; }"
         )
         studio_layout = QVBoxLayout(self.studio)
         studio_layout.setContentsMargins(8, 7, 8, 8)
@@ -811,24 +824,36 @@ class DicomViewer(QWidget):
         title_layout = QHBoxLayout(titlebar)
         title_layout.setContentsMargins(4, 0, 2, 0)
         title_layout.setSpacing(8)
-        self.studio_title = QPushButton("Vissium  ·  Studio", titlebar)
+        self.studio_title = QPushButton("Studio", titlebar)
+        self.studio_title.setObjectName("studioTitle")
         self.studio_title.setFlat(True)
         self.studio_title.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.studio_minimize = QPushButton("−", titlebar)
-        self.studio_maximize = QPushButton("↗", titlebar)
-        self.studio_close = QPushButton("×", titlebar)
+        self.studio_minimize = QPushButton(titlebar)
+        self.studio_maximize = QPushButton(titlebar)
+        self.studio_close = QPushButton(titlebar)
+        self.studio_minimize.setIcon(icon("minimize"))
+        self.studio_maximize.setIcon(icon("maximize"))
+        self.studio_close.setIcon(icon("switch"))
         for control, tip in ((self.studio_minimize, "Minimizar Studio"),
                              (self.studio_maximize, "Maximizar Studio"),
-                             (self.studio_close, "Ocultar Studio")):
+                             (self.studio_close, "Cambiar a la vista del paciente")):
             control.setFixedSize(26, 24)
             control.setFlat(True)
+            control.setIconSize(QSize(14, 14))
             control.setToolTip(tip)
+            control.setAccessibleName(tip)
         title_layout.addWidget(self.studio_title, 1)
         title_layout.addWidget(self.studio_minimize)
         title_layout.addWidget(self.studio_maximize)
         title_layout.addWidget(self.studio_close)
         studio_layout.addWidget(titlebar)
         self._studio_layout = studio_layout
+        self._studio_title_layout = title_layout
+        self._studio_shadow = QGraphicsDropShadowEffect(self.studio_title)
+        self._studio_shadow.setBlurRadius(16)
+        self._studio_shadow.setOffset(0, 5)
+        self._studio_shadow.setColor(QColor(0, 0, 0, 190))
+        self.studio_title.setGraphicsEffect(self._studio_shadow)
         self.studio_minimized = False
         self.studio_maximized = False
         self.studio_title.clicked.connect(self._restore_studio)
@@ -884,6 +909,8 @@ class DicomViewer(QWidget):
             self.cbct_viewer.show()
             self.cbct_viewer.start()
             self.studio.show()
+            if not self.studio_minimized:
+                self._minimize_studio()
             self.cbctModeChanged.emit(True)
             self._layout_studio()
         else:
@@ -903,15 +930,18 @@ class DicomViewer(QWidget):
             self.studio_minimize.show()
             self.studio_maximize.show()
             self.studio_close.show()
-            self.studio_title.setText("Vissium  ·  Studio")
-            self.studio_maximize.setText("↗")
+            self.studio_maximize.setIcon(icon("maximize"))
+            self.studio.setProperty("studioMinimized", False)
+            self._studio_shadow.setEnabled(False)
+            self.studio.style().unpolish(self.studio)
+            self.studio.style().polish(self.studio)
             self.cbctModeChanged.emit(False)
 
     def _layout_studio(self):
         if not self.studio.isVisible():
             return
         if self.studio_minimized:
-            self.studio.setGeometry(self.width() - 124, self.height() - 60, 112, 44)
+            self.studio.setGeometry(self.width() - 136, self.height() - 72, 124, 60)
         elif self.studio_maximized:
             self.studio.setGeometry(12, 12, max(200, self.width() - 24),
                                     max(120, self.height() - 24))
@@ -929,8 +959,12 @@ class DicomViewer(QWidget):
         self.studio_minimize.hide()
         self.studio_maximize.hide()
         self.studio_close.hide()
-        self.studio_title.setText("Studio")
-        self.studio_title.setStyleSheet("text-align:left; font-weight:600;")
+        self.studio.setProperty("studioMinimized", True)
+        self._studio_layout.setContentsMargins(6, 3, 6, 10)
+        self._studio_title_layout.setContentsMargins(0, 0, 0, 0)
+        self._studio_shadow.setEnabled(True)
+        self.studio.style().unpolish(self.studio)
+        self.studio.style().polish(self.studio)
         self._layout_studio()
 
     def _restore_studio(self):
@@ -941,8 +975,12 @@ class DicomViewer(QWidget):
         self.studio_minimize.show()
         self.studio_maximize.show()
         self.studio_close.show()
-        self.studio_title.setText("Vissium  ·  Studio")
-        self.studio_title.setStyleSheet("")
+        self.studio.setProperty("studioMinimized", False)
+        self._studio_layout.setContentsMargins(8, 7, 8, 8)
+        self._studio_title_layout.setContentsMargins(4, 0, 2, 0)
+        self._studio_shadow.setEnabled(False)
+        self.studio.style().unpolish(self.studio)
+        self.studio.style().polish(self.studio)
         self._layout_studio()
 
     def _maximize_studio(self):
@@ -952,8 +990,13 @@ class DicomViewer(QWidget):
         self.studio_minimize.show()
         self.studio_maximize.show()
         self.studio_close.show()
-        self.studio_title.setText("Vissium  ·  Studio")
-        self.studio_maximize.setText("↙" if self.studio_maximized else "↗")
+        self.studio_maximize.setIcon(icon("restore" if self.studio_maximized else "maximize"))
+        self.studio.setProperty("studioMinimized", False)
+        self._studio_layout.setContentsMargins(8, 7, 8, 8)
+        self._studio_title_layout.setContentsMargins(4, 0, 2, 0)
+        self._studio_shadow.setEnabled(False)
+        self.studio.style().unpolish(self.studio)
+        self.studio.style().polish(self.studio)
         self._layout_studio()
 
     def resizeEvent(self, event):
