@@ -294,16 +294,21 @@ class PreviewWindow(QMainWindow):
         self.btn_guides = self._rail_button(
             "crosshair", "Guías", "Mostrar u ocultar las guías de cruce", checkable=True)
         self.btn_reset = self._rail_button("refresh", "Restablecer", "Restablecer vista")
+        self.btn_skull = self._rail_button(
+            "skull", "CBCT 3D", "Generar y mostrar la reconstrucción 3D del CBCT activo",
+            checkable=True)
         self.btn_guides.setChecked(True)
         self.btn_guides.setEnabled(False)
         self.btn_reset.setEnabled(False)
-        for button in (self.btn_browser, self.btn_guides, self.btn_reset):
+        self.btn_skull.setEnabled(False)
+        for button in (self.btn_browser, self.btn_guides, self.btn_reset, self.btn_skull):
             rail_layout.addWidget(button)
         rail_layout.addStretch(1)
 
         self.btn_browser.toggled.connect(self._set_browser_visible)
         self.btn_guides.toggled.connect(self._on_guides_toggled)
         self.btn_reset.clicked.connect(self._on_reset_clicked)
+        self.btn_skull.toggled.connect(self._on_cbct_toggled)
 
         # Tarjeta redondeada con línea fina: explorador manual + pestañas.
         self.card = QFrame(self)
@@ -408,9 +413,24 @@ class PreviewWindow(QMainWindow):
             widget.set_guides_visible(checked)
 
     def _on_reset_clicked(self):
-        action = getattr(self.tabs.currentWidget(), "reset_view", None)
+        widget = self.tabs.currentWidget()
+        action = getattr(widget, "reset_view", None)
         if callable(action):
             action()
+        cbct = getattr(widget, "cbct_viewer", None)
+        if cbct is not None and cbct.isVisible():
+            cbct.reset_view()
+
+    def _on_cbct_toggled(self, checked: bool):
+        widget = self.tabs.currentWidget()
+        action = getattr(widget, "set_cbct_3d_visible", None)
+        if callable(action):
+            action(checked)
+
+    def _sync_cbct_button(self, checked: bool):
+        self.btn_skull.blockSignals(True)
+        self.btn_skull.setChecked(checked)
+        self.btn_skull.blockSignals(False)
 
     def _update_rail(self, *_):
         """Habilita los botones según lo que sepa hacer la pestaña activa."""
@@ -422,6 +442,12 @@ class PreviewWindow(QMainWindow):
             self.btn_guides.setChecked(bool(widget.guides_visible))
             self.btn_guides.blockSignals(False)
         self.btn_reset.setEnabled(callable(getattr(widget, "reset_view", None)))
+        can_cbct = bool(getattr(widget, "supports_cbct_3d", False))
+        self.btn_skull.setEnabled(can_cbct)
+        self.btn_skull.blockSignals(True)
+        self.btn_skull.setChecked(bool(can_cbct and getattr(widget, "cbct_viewer", None)
+                                      and widget.cbct_viewer.isVisible()))
+        self.btn_skull.blockSignals(False)
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -545,6 +571,7 @@ class PreviewWindow(QMainWindow):
                     widget.setWordWrap(True)
                 else:
                     widget = DicomViewer(job.files, parent=self.tabs, volume=job.volume)
+                    widget.cbctModeChanged.connect(self._sync_cbct_button)
                 title = job.label
                 tab_ic = app_icon()   # las pestañas DICOM llevan el icono de Vissium
                 if job.volume is not None:

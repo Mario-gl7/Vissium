@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QPushButton,
     QScrollArea,
     QSizePolicy,
     QSlider,
@@ -56,6 +57,7 @@ from theme import (
     WARNING,
 )
 from volume import DicomLoadError, SeriesInfo, Volume, load_volume, series_labels
+from viewers.cbct_viewer import CBCTViewer
 
 log = logging.getLogger("vissium.dicom")
 
@@ -708,6 +710,8 @@ class _InfoPanel(QWidget):
 class DicomViewer(QWidget):
     """Widget de una pestaña: vista MPR completa con panel de información y series."""
 
+    cbctModeChanged = Signal(bool)
+
     def __init__(self, file_paths: list[str], parent=None, volume: Volume | None = None):
         super().__init__(parent)
         self._show_guides = True
@@ -742,6 +746,7 @@ class DicomViewer(QWidget):
         self.sagittal_view = _PlaneView("Sagital", PLANE_COLORS["sagittal"], self)
         self.coronal_view = _PlaneView("Coronal", PLANE_COLORS["coronal"], self)
         self.info_panel = _InfoPanel(self)
+        self.cbct_viewer = None
 
         for view in (self.axial_view, self.sagittal_view, self.coronal_view):
             view.slider.valueChanged.connect(self._render_all)
@@ -791,6 +796,47 @@ class DicomViewer(QWidget):
         for widget, row, col, rspan, cspan in self._plane_positions.values():
             self.views_grid.addWidget(widget, row, col, rspan, cspan)
 
+        # Panel flotante inspirado en la captura: el contenido del estudio
+        # permanece disponible sobre la vista 3D y se puede minimizar/maximizar.
+        self.studio = QFrame(self)
+        self.studio.setObjectName("studioPanel")
+        self.studio.setStyleSheet(
+            "QFrame#studioPanel { background:#151619; border:1px solid #3b3c42;"
+            " border-radius:12px; }"
+        )
+        studio_layout = QVBoxLayout(self.studio)
+        studio_layout.setContentsMargins(8, 7, 8, 8)
+        studio_layout.setSpacing(4)
+        titlebar = QWidget(self.studio)
+        title_layout = QHBoxLayout(titlebar)
+        title_layout.setContentsMargins(4, 0, 2, 0)
+        title_layout.setSpacing(8)
+        self.studio_title = QPushButton("Vissium  ·  Studio", titlebar)
+        self.studio_title.setFlat(True)
+        self.studio_title.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.studio_minimize = QPushButton("−", titlebar)
+        self.studio_maximize = QPushButton("↗", titlebar)
+        self.studio_close = QPushButton("×", titlebar)
+        for control, tip in ((self.studio_minimize, "Minimizar Studio"),
+                             (self.studio_maximize, "Maximizar Studio"),
+                             (self.studio_close, "Ocultar Studio")):
+            control.setFixedSize(26, 24)
+            control.setFlat(True)
+            control.setToolTip(tip)
+        title_layout.addWidget(self.studio_title, 1)
+        title_layout.addWidget(self.studio_minimize)
+        title_layout.addWidget(self.studio_maximize)
+        title_layout.addWidget(self.studio_close)
+        studio_layout.addWidget(titlebar)
+        self._studio_layout = studio_layout
+        self.studio_minimized = False
+        self.studio_maximized = False
+        self.studio_title.clicked.connect(self._restore_studio)
+        self.studio_minimize.clicked.connect(self._minimize_studio)
+        self.studio_maximize.clicked.connect(self._maximize_studio)
+        self.studio_close.clicked.connect(lambda: self.set_cbct_3d_visible(False))
+        self.studio.hide()
+
         self._apply_volume(self.volume)
         self._refresh_series_selector()
 
@@ -821,15 +867,117 @@ class DicomViewer(QWidget):
             view.image_view.reset_pan()
         self._render_all()
 
+    @property
+    def supports_cbct_3d(self) -> bool:
+        return self.volume is not None and not self.volume.is_single_image
+
+    def set_cbct_3d_visible(self, visible: bool):
+        if not self.supports_cbct_3d:
+            return
+        if visible:
+            self.views_grid.removeWidget(self.info_panel)
+            self.info_panel.setParent(self.studio)
+            self._studio_layout.addWidget(self.info_panel, 1)
+            if self.cbct_viewer is None:
+                self.cbct_viewer = CBCTViewer(self.volume, self)
+            self.views_grid.addWidget(self.cbct_viewer, 1, 1)
+            self.cbct_viewer.show()
+            self.cbct_viewer.start()
+            self.studio.show()
+            self.cbctModeChanged.emit(True)
+            self._layout_studio()
+        else:
+            if self.cbct_viewer is not None:
+                self.cbct_viewer.hide()
+                self.views_grid.removeWidget(self.cbct_viewer)
+            self._studio_layout.removeWidget(self.info_panel)
+            self.info_panel.setParent(self)
+            if self._is_single():
+                self.views_grid.addWidget(self.info_panel, 0, 1, 2, 1)
+            else:
+                self.views_grid.addWidget(self.info_panel, 1, 1)
+            self.studio.hide()
+            self.info_panel.show()
+            self.studio_minimized = False
+            self.studio_maximized = False
+            self.studio_minimize.show()
+            self.studio_maximize.show()
+            self.studio_close.show()
+            self.studio_title.setText("Vissium  ·  Studio")
+            self.studio_maximize.setText("↗")
+            self.cbctModeChanged.emit(False)
+
+    def _layout_studio(self):
+        if not self.studio.isVisible():
+            return
+        if self.studio_minimized:
+            self.studio.setGeometry(self.width() - 124, self.height() - 60, 112, 44)
+        elif self.studio_maximized:
+            self.studio.setGeometry(12, 12, max(200, self.width() - 24),
+                                    max(120, self.height() - 24))
+        else:
+            width = min(370, max(300, self.width() - 32))
+            height = min(480, max(220, self.height() - 32))
+            self.studio.setGeometry(self.width() - width - 18,
+                                    self.height() - height - 18, width, height)
+        self.studio.raise_()
+
+    def _minimize_studio(self):
+        self.studio_minimized = True
+        self.studio_maximized = False
+        self.info_panel.hide()
+        self.studio_minimize.hide()
+        self.studio_maximize.hide()
+        self.studio_close.hide()
+        self.studio_title.setText("Studio")
+        self.studio_title.setStyleSheet("text-align:left; font-weight:600;")
+        self._layout_studio()
+
+    def _restore_studio(self):
+        if not self.studio_minimized:
+            return
+        self.studio_minimized = False
+        self.info_panel.show()
+        self.studio_minimize.show()
+        self.studio_maximize.show()
+        self.studio_close.show()
+        self.studio_title.setText("Vissium  ·  Studio")
+        self.studio_title.setStyleSheet("")
+        self._layout_studio()
+
+    def _maximize_studio(self):
+        self.studio_minimized = False
+        self.studio_maximized = not self.studio_maximized
+        self.info_panel.show()
+        self.studio_minimize.show()
+        self.studio_maximize.show()
+        self.studio_close.show()
+        self.studio_title.setText("Vissium  ·  Studio")
+        self.studio_maximize.setText("↙" if self.studio_maximized else "↗")
+        self._layout_studio()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._layout_studio()
+
     def shutdown(self):
         """Ignora cualquier lectura de serie que siga en curso al cerrar la pestaña."""
         self._request_id += 1
+        if self.cbct_viewer is not None:
+            self.cbct_viewer.shutdown()
 
     # ------------------------------------------------------------------
     # Volumen actual y selector de series
     # ------------------------------------------------------------------
     def _apply_volume(self, volume: Volume):
         """Pone `volume` en las tres vistas (alta inicial o cambio de serie)."""
+        restore_cbct = bool(self.cbct_viewer is not None and self.cbct_viewer.isVisible())
+        if self.cbct_viewer is not None:
+            self.set_cbct_3d_visible(False)
+            self.views_grid.removeWidget(self.cbct_viewer)
+            self.cbct_viewer.shutdown()
+            self.cbct_viewer.deleteLater()
+            self.cbct_viewer = None
         self.volume = volume
         n_z, n_y, n_x = volume.shape
         self._relayout()
@@ -850,6 +998,8 @@ class DicomViewer(QWidget):
         self.info_panel.set_details(_build_sections(volume))
         self.info_panel.set_warnings(volume.warnings)
         self._render_all()
+        if restore_cbct and self.supports_cbct_3d:
+            self.set_cbct_3d_visible(True)
 
     def _current_series_index(self) -> int:
         for i, info in enumerate(self._series):
