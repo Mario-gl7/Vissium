@@ -26,11 +26,13 @@ from PySide6.QtGui import (
     QImage,
     QImageReader,
     QPainter,
+    QPainterPath,
+    QPen,
     QPixmap,
 )
 from PySide6.QtWidgets import QSizePolicy, QVBoxLayout, QWidget
 
-from theme import CELL_BG, TEXT, TEXT_DIM
+from theme import CELL_BG, LINE, RADIUS, TEXT, TEXT_DIM
 
 MAX_ZOOM = 32.0
 ZOOM_STEP = 1.15
@@ -174,7 +176,13 @@ class _Canvas(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor(CELL_BG))
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        # Caja redondeada con borde fino (estilo Linear): la imagen se recorta dentro.
+        frame = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        clip = QPainterPath()
+        clip.addRoundedRect(frame, RADIUS, RADIUS)
+        painter.fillPath(clip, QColor(CELL_BG))
+        painter.setClipPath(clip)
 
         if self.image is None:
             painter.setPen(QColor(TEXT_DIM))
@@ -202,6 +210,11 @@ class _Canvas(QWidget):
                     painter.drawImage(target, self.image, source)
 
         self._paint_overlay(painter)
+        painter.setClipping(False)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(QColor(LINE), 1))
+        painter.drawRoundedRect(frame, RADIUS, RADIUS)
         painter.end()
 
     def _paint_overlay(self, painter: QPainter):

@@ -49,7 +49,6 @@ from PySide6.QtWidgets import (
 from theme import (
     CELL_BG,
     CROSSHAIR,
-    PANEL_BG,
     PLANE_COLORS,
     TEXT,
     TEXT_DIM,
@@ -440,7 +439,7 @@ class _PlaneView(QWidget):
         self.slider = QSlider(Qt.Orientation.Horizontal, self)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(1, 1, 1, 1)   # deja ver el borde redondeado de la caja
         layout.setSpacing(0)
         layout.addLayout(header)
         layout.addWidget(self.image_view, stretch=1)
@@ -575,15 +574,15 @@ class _InfoPanel(QWidget):
         self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setContentsMargins(1, 8, 1, 8)    # no tapa el borde redondeado de la caja
         outer.setSpacing(0)
         self.scroll = QScrollArea(self)
         self.scroll.setWidgetResizable(True)
         self.scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.scroll.setStyleSheet(
-            f"QScrollArea {{ background-color: {PANEL_BG}; border: 0; }}"
-            f"QScrollArea > QWidget > QWidget {{ background-color: {PANEL_BG}; }}"
+            "QScrollArea { background: transparent; border: 0; }"
+            "QScrollArea > QWidget > QWidget { background: transparent; }"
         )
         outer.addWidget(self.scroll)
 
@@ -737,7 +736,7 @@ class DicomViewer(QWidget):
 
         self.setObjectName("dicomRoot")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setMinimumSize(MIN_VIEW_SIZE * 2 + 3, MIN_VIEW_SIZE * 2 + 100)
+        self.setMinimumSize(MIN_VIEW_SIZE * 2 + 8, MIN_VIEW_SIZE * 2 + 100)
 
         self.axial_view = _PlaneView("Axial", PLANE_COLORS["axial"], self)
         self.sagittal_view = _PlaneView("Sagital", PLANE_COLORS["sagittal"], self)
@@ -773,11 +772,11 @@ class DicomViewer(QWidget):
         self.info_panel.width_slider.valueChanged.connect(self._on_wl_changed)
         self.info_panel.seriesSelected.connect(self._on_series_selected)
 
-        # Rejilla 2x2 con celdas del mismo tamaño; el fondo del propio visor
-        # (color de línea) asoma en el hueco de 1 px entre celdas.
+        # Rejilla 2x2 con celdas del mismo tamaño; cada celda es una caja con borde
+        # fino y esquinas redondeadas (theme.py), separadas por un hueco de 8 px.
         self.views_grid = QGridLayout(self)
         self.views_grid.setContentsMargins(0, 0, 0, 0)
-        self.views_grid.setSpacing(1)
+        self.views_grid.setSpacing(8)
         self.views_grid.setRowStretch(0, 1)
         self.views_grid.setRowStretch(1, 1)
         self.views_grid.setColumnStretch(0, 1)

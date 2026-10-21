@@ -35,6 +35,14 @@ Ampliado:
   también el nº de elementos y la fecha más reciente de su contenido directo;
   antes solo miraba la fecha de la propia carpeta y podía enseñar series viejas.
 - Los avisos de la búsqueda de archivos (límites alcanzados) llegan al visor DICOM.
+
+Estilo Linear (2026-10-21):
+- Barra lateral izquierda con botones de texto + icono (sin bordes) y, a su derecha,
+  una tarjeta redondeada con línea fina que contiene las pestañas (en píldora) y
+  las vistas. Cada visor dibuja sus propias cajas redondeadas dentro de la tarjeta.
+- Visor STL: botón "Dos STL" (ver `viewers/mesh_viewer.py`); esta ventana le pasa la
+  lista de los demás STL abiertos (`_other_meshes`) para poder compararlos, y
+  actualiza el título de la pestaña cuando cambian los modelos de la vista.
 """
 from __future__ import annotations
 
@@ -46,16 +54,17 @@ from dataclasses import dataclass, field
 from PySide6.QtCore import QFileSystemWatcher, QSize, Qt, QThread, Signal, QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
+    QFrame,
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
+    QPushButton,
     QSplitter,
     QStackedWidget,
     QStatusBar,
     QTabBar,
     QTabWidget,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -73,6 +82,7 @@ from version import APP_NAME
 log = logging.getLogger("vissium.preview")
 
 MAX_MESHES_PER_FOLDER = 5
+RAIL_WIDTH = 150
 DUPLICATE_REQUEST_S = 0.8
 
 
@@ -268,19 +278,22 @@ class PreviewWindow(QMainWindow):
         self.splitter.setStretchFactor(0, 0)
         self.splitter.setStretchFactor(1, 1)
 
-        # Barra de iconos a la izquierda: actúa sobre la pestaña activa.
+        # Barra lateral a la izquierda: actúa sobre la pestaña activa.
         self.rail = QWidget(self)
         self.rail.setObjectName("rail")
-        self.rail.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.rail.setFixedWidth(46)
+        self.rail.setFixedWidth(RAIL_WIDTH)
         rail_layout = QVBoxLayout(self.rail)
-        rail_layout.setContentsMargins(5, 10, 5, 10)
-        rail_layout.setSpacing(8)
+        rail_layout.setContentsMargins(0, 4, 0, 4)
+        rail_layout.setSpacing(2)
+        brand = QLabel(APP_NAME, self.rail)
+        brand.setObjectName("railBrand")
+        rail_layout.addWidget(brand)
+        rail_layout.addSpacing(10)
         self.btn_browser = self._rail_button(
-            "folder", "Explorador de archivos manual", checkable=True)
+            "folder", "Abrir carpeta", "Explorador de archivos manual", checkable=True)
         self.btn_guides = self._rail_button(
-            "crosshair", "Mostrar u ocultar las guías de cruce", checkable=True)
-        self.btn_reset = self._rail_button("refresh", "Restablecer vista")
+            "crosshair", "Guías", "Mostrar u ocultar las guías de cruce", checkable=True)
+        self.btn_reset = self._rail_button("refresh", "Restablecer", "Restablecer vista")
         self.btn_guides.setChecked(True)
         self.btn_guides.setEnabled(False)
         self.btn_reset.setEnabled(False)
@@ -292,12 +305,20 @@ class PreviewWindow(QMainWindow):
         self.btn_guides.toggled.connect(self._on_guides_toggled)
         self.btn_reset.clicked.connect(self._on_reset_clicked)
 
+        # Tarjeta redondeada con línea fina: explorador manual + pestañas.
+        self.card = QFrame(self)
+        self.card.setObjectName("card")
+        card_layout = QVBoxLayout(self.card)
+        card_layout.setContentsMargins(1, 1, 1, 1)
+        card_layout.setSpacing(0)
+        card_layout.addWidget(self.splitter)
+
         central = QWidget(self)
         central_layout = QHBoxLayout(central)
-        central_layout.setContentsMargins(0, 0, 0, 0)
-        central_layout.setSpacing(0)
+        central_layout.setContentsMargins(10, 10, 10, 4)
+        central_layout.setSpacing(10)
         central_layout.addWidget(self.rail)
-        central_layout.addWidget(self.splitter, stretch=1)
+        central_layout.addWidget(self.card, stretch=1)
 
         self.setCentralWidget(central)
         self.setStatusBar(QStatusBar(self))
@@ -328,15 +349,18 @@ class PreviewWindow(QMainWindow):
     # ------------------------------------------------------------------
     # Barra de iconos
     # ------------------------------------------------------------------
-    def _rail_button(self, icon_name: str, tooltip: str, checkable: bool = False) -> QToolButton:
-        button = QToolButton(self.rail)
+    def _rail_button(self, icon_name: str, text: str, tooltip: str,
+                     checkable: bool = False) -> QPushButton:
+        button = QPushButton(text, self.rail)
+        button.setObjectName("railBtn")
         button.setIcon(icon(icon_name))
-        button.setIconSize(QSize(20, 20))
-        button.setFixedSize(36, 36)
+        button.setIconSize(QSize(16, 16))
+        button.setFixedHeight(32)
         button.setToolTip(tooltip)
         button.setAccessibleName(tooltip)
         button.setCheckable(checkable)
-        button.setAutoRaise(True)
+        button.setFlat(True)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
         return button
 
     def _set_browser_visible(self, visible: bool):
@@ -361,6 +385,22 @@ class PreviewWindow(QMainWindow):
             make_close_button(lambda _=False, w=widget: self._close_tab(self.tabs.indexOf(w)),
                               self.tabs.tabBar()))
         return idx
+
+    def _other_meshes(self, viewer) -> list[tuple[str, str]]:
+        """(nombre, ruta) de los STL/PLY abiertos en otras pestañas: se pueden añadir al visor `viewer`."""
+        found = []
+        for i in range(self.tabs.count()):
+            widget = self.tabs.widget(i)
+            if widget is viewer or not isinstance(widget, MeshViewer):
+                continue
+            if widget.primary_path:
+                found.append((os.path.basename(widget.primary_path), widget.primary_path))
+        return found
+
+    def _set_tab_title(self, widget, text: str):
+        idx = self.tabs.indexOf(widget)
+        if idx >= 0:
+            self.tabs.setTabText(idx, text)
 
     def _on_guides_toggled(self, checked: bool):
         widget = self.tabs.currentWidget()
@@ -520,6 +560,9 @@ class PreviewWindow(QMainWindow):
                 status = f"Imagen cargada: {job.label}"
             else:
                 widget = MeshViewer(job.files[0], parent=self.tabs)
+                widget.set_sources_provider(lambda w=widget: self._other_meshes(w))
+                widget.titleChanged.connect(
+                    lambda text, w=widget: self._set_tab_title(w, text))
                 title = job.label
                 tab_ic = tab_icon("cube")
                 status = f"Modelo 3D cargado: {job.label}"

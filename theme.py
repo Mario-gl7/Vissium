@@ -1,15 +1,23 @@
 """
 Tema visual de Vissium: colores, hoja de estilos global e iconos.
 
-Interfaz minimalista y neutra (gris casi negro, líneas de 1 px, un único
-color de acento). Los iconos se dibujan con QPainter, así que no hace falta
-empaquetar imágenes ni depender de fuentes de iconos del sistema.
+Estilo "Linear" (referencia: linear.app / awesome-design-md): barra lateral sin
+bordes, contenido dentro de una tarjeta redondeada con línea fina clara, cada
+apartado en su propia caja con borde de 1 px y esquinas de 10-12 px, botones en
+forma de píldora y un único color de acento. Los colores son los de siempre
+(fondo casi negro, acento índigo, colores de plano rojo/amarillo/verde).
+
+Los iconos se dibujan con QPainter, así que no hace falta empaquetar imágenes ni
+depender de fuentes de iconos del sistema.
 
 - `STYLESHEET`: se aplica una sola vez, en la ventana de previsualizaciones;
-  los visores heredan el estilo.
+  los visores heredan el estilo. Los widgets son transparentes por defecto: el
+  fondo lo ponen la ventana (`BG`), la tarjeta (`#card`) y cada celda.
 - `icon(nombre)`: icono de línea fina ("folder", "crosshair", "refresh", "close",
-  "image", "cube", "loading", "warning") con
+  "image", "cube", "loading", "warning", "layers", "eye", "eye-off") con
   estados apagado / activo / deshabilitado.
+- `rounded_mask(widget, radio)`: recorta con esquinas redondeadas un widget con
+  ventana nativa (el de VTK), que de otro modo se vería con esquinas cuadradas.
 - `apply_dark_titlebar(ventana)`: en Windows 10/11 pone oscura la barra de
   título nativa para que case con el resto de la interfaz.
 """
@@ -19,30 +27,36 @@ import ctypes
 import os
 import sys
 
-from PySide6.QtCore import Qt, QPointF
-from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap
+from PySide6.QtCore import Qt, QPointF, QRectF
+from PySide6.QtGui import QColor, QIcon, QPainter, QPainterPath, QPen, QPixmap, QRegion
 
 from paths import resource_path
 
 IS_WINDOWS = sys.platform.startswith("win")
 
 # -- Paleta ---------------------------------------------------------------
-# Superficies casi negras con bordes de 1 px (referencia: Linear/Raycast en
-# awesome-design-md) y un único acento, usado solo para foco y selección.
-BG = "#0f1011"
-CELL_BG = "#000000"
-PANEL_BG = "#0b0c0d"
-LINE = "#23252a"
-LINE_STRONG = "#34343a"
-FIELD_BG = "#16171a"
-HOVER_BG = "#1a1b1e"
+# Mismos colores que antes; se añade la tarjeta (`CARD`) y las líneas pasan a ser
+# más claras para delimitar cada apartado. Todo en hexadecimal (se usa también
+# con QColor).
+BG = "#0e0f10"            # ventana y barra lateral
+CARD = "#131416"          # tarjeta principal y paneles
+CELL_BG = "#000000"       # vistas de imagen / modelo
+PANEL_BG = CARD
+LINE = "#2f3035"          # línea fina (separadores, bordes de cajas)
+LINE_STRONG = "#45464c"   # borde de botones, menús y paneles flotantes
+FIELD_BG = "#17181b"
+HOVER_BG = "#1b1c1f"
 TEXT = "#ededee"
 TEXT_DIM = "#a0a3aa"
 TEXT_MUTED = "#6f737b"
 ICON_DISABLED = "#3a3c42"
 ACCENT = "#7b86e8"
+ACCENT_SOFT = "#1a1c2e"   # fondo de lo activo (píldora "Dos STL", selección)
+ACCENT_TEXT = "#aab1f2"
 CROSSHAIR = "#4fc3f7"
 WARNING = "#e3c34c"
+RADIUS = 10               # esquinas de cajas y vistas
+RADIUS_CARD = 12          # esquinas de la tarjeta principal
 FONT_STACK = '"Segoe UI Variable Text", "Segoe UI", "Helvetica Neue", Arial, sans-serif'
 
 PLANE_COLORS = {
@@ -52,30 +66,37 @@ PLANE_COLORS = {
 }
 
 STYLESHEET = f"""
-QWidget {{ background-color: {BG}; color: {TEXT}; font-family: {FONT_STACK}; font-size: 12px; }}
+QWidget {{ background: transparent; color: {TEXT}; font-family: {FONT_STACK}; font-size: 12px; }}
+QMainWindow, QDialog, QMessageBox {{ background-color: {BG}; }}
 QLabel {{ background: transparent; }}
 QToolTip {{
     background-color: {HOVER_BG}; color: {TEXT};
-    border: 1px solid {LINE_STRONG}; padding: 4px 8px;
+    border: 1px solid {LINE_STRONG}; border-radius: 6px; padding: 4px 8px;
 }}
 
 QSplitter::handle {{ background-color: {LINE}; }}
 QSplitter::handle:horizontal {{ width: 1px; }}
 
-QTabWidget::pane {{ border: 0; border-top: 1px solid {LINE}; }}
+/* Tarjeta principal: contiene las pestañas y las vistas. */
+#card {{ background-color: {CARD}; border: 1px solid {LINE}; border-radius: {RADIUS_CARD}px; }}
+
+/* Pestañas en la cabecera de la tarjeta, con la activa en píldora. */
+QTabWidget::pane {{ border: 0; border-top: 1px solid {LINE}; padding: 10px; }}
+QTabWidget::tab-bar {{ left: 8px; }}
 QTabBar {{ background: transparent; }}
 QTabBar::tab {{
     background: transparent; color: {TEXT_MUTED};
-    padding: 8px 14px; border: 0; border-bottom: 2px solid transparent;
+    padding: 5px 10px; margin: 7px 3px 7px 0;
+    border: 1px solid transparent; border-radius: 8px;
 }}
-QTabBar::tab:hover {{ color: {TEXT_DIM}; }}
-QTabBar::tab:selected {{ color: {TEXT}; border-bottom: 2px solid {ACCENT}; }}
+QTabBar::tab:hover {{ color: {TEXT_DIM}; background-color: {HOVER_BG}; }}
+QTabBar::tab:selected {{ color: {TEXT}; background-color: {HOVER_BG}; border: 1px solid {LINE}; }}
 
-QStatusBar {{ color: {TEXT_MUTED}; border-top: 1px solid {LINE}; }}
+QStatusBar {{ color: {TEXT_MUTED}; }}
 QStatusBar::item {{ border: 0; }}
 
 QToolButton {{
-    background: transparent; border: 1px solid transparent; border-radius: 6px; padding: 6px;
+    background: transparent; border: 1px solid transparent; border-radius: 8px; padding: 6px;
 }}
 QToolButton:hover {{ background-color: {HOVER_BG}; }}
 QToolButton:checked {{ background-color: {LINE}; }}
@@ -85,63 +106,118 @@ QToolButton#tabClose:hover {{ background-color: {LINE_STRONG}; }}
 
 QPushButton {{
     background-color: {HOVER_BG}; border: 1px solid {LINE_STRONG};
-    border-radius: 6px; padding: 5px 14px;
+    border-radius: 8px; padding: 5px 14px;
 }}
 QPushButton:hover {{ background-color: {LINE}; }}
 QPushButton:focus {{ border: 1px solid {ACCENT}; }}
 
+/* Barra lateral: botones de texto sin borde; el activo, en caja gris. */
+#rail {{ background: transparent; }}
+#railBrand {{ font-size: 13px; font-weight: 600; color: {TEXT}; padding: 4px 6px; }}
+QPushButton#railBtn {{
+    background: transparent; border: 1px solid transparent; border-radius: 8px;
+    padding: 6px 10px; text-align: left; color: {TEXT_DIM};
+}}
+QPushButton#railBtn:hover {{ background-color: {HOVER_BG}; color: {TEXT}; }}
+QPushButton#railBtn:checked {{ background-color: {HOVER_BG}; color: {TEXT}; }}
+QPushButton#railBtn:focus {{ border: 1px solid {ACCENT}; }}
+QPushButton#railBtn:disabled {{ color: {ICON_DISABLED}; background: transparent; }}
+
+/* Botones en forma de píldora (cabecera del visor STL). */
+QPushButton#pill {{
+    background-color: {FIELD_BG}; border: 1px solid {LINE_STRONG}; border-radius: 14px;
+    padding: 4px 12px; color: {TEXT_DIM};
+}}
+QPushButton#pill:hover {{ background-color: {HOVER_BG}; color: {TEXT}; }}
+QPushButton#pill:checked {{ background-color: {ACCENT_SOFT}; border: 1px solid {ACCENT}; color: {ACCENT_TEXT}; }}
+QPushButton#pill:focus {{ border: 1px solid {ACCENT}; }}
+
+QMenu {{
+    background-color: {FIELD_BG}; border: 1px solid {LINE_STRONG}; border-radius: 10px; padding: 4px;
+}}
+QMenu::item {{ padding: 6px 16px; border-radius: 6px; color: {TEXT}; background: transparent; }}
+QMenu::item:selected {{ background-color: {HOVER_BG}; }}
+QMenu::item:disabled {{ color: {TEXT_MUTED}; }}
+QMenu::separator {{ height: 1px; background: {LINE}; margin: 4px 6px; }}
+
 QLineEdit {{
     background-color: {FIELD_BG}; border: 1px solid {LINE};
-    border-radius: 6px; padding: 4px 6px;
+    border-radius: 8px; padding: 4px 8px;
 }}
 QLineEdit:focus {{ border: 1px solid {ACCENT}; }}
-QTreeView {{ background-color: {BG}; border: 0; }}
-QTreeView::item:selected {{ background-color: {LINE}; color: {TEXT}; }}
+QTreeView {{ background-color: {CARD}; border: 0; }}
+QTreeView::item {{ padding: 2px 0; border-radius: 6px; }}
+QHeaderView {{ background: transparent; }}
+QHeaderView::section {{ background: transparent; color: {TEXT_MUTED}; border: 0; padding: 4px 6px; }}
+QTreeView::item:selected {{ background-color: {HOVER_BG}; color: {TEXT}; }}
 
 QComboBox {{
     background-color: {FIELD_BG}; border: 1px solid {LINE};
-    border-radius: 6px; padding: 4px 8px; color: {TEXT};
+    border-radius: 8px; padding: 4px 8px; color: {TEXT};
 }}
 QComboBox:focus {{ border: 1px solid {ACCENT}; }}
 QComboBox:disabled {{ color: {TEXT_MUTED}; }}
 QComboBox QAbstractItemView {{
-    background-color: {FIELD_BG}; color: {TEXT}; border: 1px solid {LINE};
-    selection-background-color: {LINE}; selection-color: {TEXT}; outline: 0;
+    background-color: {FIELD_BG}; color: {TEXT}; border: 1px solid {LINE_STRONG};
+    border-radius: 8px; selection-background-color: {HOVER_BG}; selection-color: {TEXT}; outline: 0;
 }}
 
 QSlider {{ background: transparent; }}
-QSlider::groove:horizontal {{ background: {LINE}; height: 2px; }}
-QSlider::sub-page:horizontal {{ background: {TEXT}; height: 2px; }}
+QSlider::groove:horizontal {{ background: {LINE}; height: 2px; border-radius: 1px; }}
+QSlider::sub-page:horizontal {{ background: {TEXT_DIM}; height: 2px; border-radius: 1px; }}
 QSlider::handle:horizontal {{
     background: {TEXT}; width: 10px; height: 10px;
     margin: -4px 0; border-radius: 5px;
 }}
 QSlider::handle:horizontal:focus {{ background: {ACCENT}; }}
 
-QScrollBar:vertical {{ background: {BG}; width: 10px; margin: 0; }}
+QScrollBar:vertical {{ background: transparent; width: 10px; margin: 0; }}
 QScrollBar::handle:vertical {{
     background: {LINE_STRONG}; border-radius: 5px; min-height: 24px;
 }}
-QScrollBar:horizontal {{ background: {BG}; height: 10px; margin: 0; }}
+QScrollBar:horizontal {{ background: transparent; height: 10px; margin: 0; }}
 QScrollBar::handle:horizontal {{
     background: {LINE_STRONG}; border-radius: 5px; min-width: 24px;
 }}
 QScrollBar::add-line, QScrollBar::sub-line {{ width: 0; height: 0; }}
 QScrollBar::add-page, QScrollBar::sub-page {{ background: transparent; }}
 
-#rail {{ border-right: 1px solid {LINE}; }}
-#dicomRoot {{ background-color: {LINE}; }}
-#planeCell {{ background-color: {CELL_BG}; }}
-#infoCell {{ background-color: {PANEL_BG}; }}
-#emptyState {{ background-color: {BG}; }}
+/* Visor DICOM: cada vista es una caja con borde fino y esquinas redondeadas. */
+#dicomRoot {{ background: transparent; }}
+#planeCell {{ background-color: {CELL_BG}; border: 1px solid {LINE}; border-radius: {RADIUS}px; }}
+#infoCell {{ background-color: {PANEL_BG}; border: 1px solid {LINE}; border-radius: {RADIUS}px; }}
+
+/* Visor STL: cabecera, marco del modelo y panel de modelos. */
+#meshHeader {{ background: transparent; }}
+#meshTitle {{ font-weight: 600; color: {TEXT}; }}
+#meshHint {{ color: {TEXT_MUTED}; font-size: 11px; }}
+#modelsPanel {{ background-color: {PANEL_BG}; border: 1px solid {LINE}; border-radius: {RADIUS}px; }}
+#modelsHeading {{ color: {TEXT_MUTED}; font-size: 11px; }}
+QPushButton#modelRow {{
+    background: transparent; border: 1px solid transparent; border-radius: 8px;
+    padding: 6px 8px; text-align: left; color: {TEXT_DIM};
+}}
+QPushButton#modelRow:hover {{ background-color: {HOVER_BG}; }}
+QPushButton#modelRow:checked {{ background-color: {HOVER_BG}; border: 1px solid {LINE}; color: {TEXT}; }}
+QToolButton#modelEye {{ padding: 4px; border-radius: 6px; }}
+
+#emptyState {{ background: transparent; }}
 #emptyTitle {{ font-size: 22px; font-weight: 600; color: {TEXT}; }}
 #emptyHint {{ font-size: 13px; color: {TEXT_DIM}; }}
 #emptyFormats {{ font-size: 11px; color: {TEXT_MUTED}; letter-spacing: 1px; }}
 #kbd {{
-    background-color: {FIELD_BG}; border: 1px solid {LINE_STRONG}; border-radius: 4px;
+    background-color: {FIELD_BG}; border: 1px solid {LINE_STRONG}; border-radius: 5px;
     padding: 1px 7px; font-family: "Cascadia Mono", Consolas, monospace; color: {TEXT};
 }}
 """
+
+
+def rounded_mask(widget, radius: int) -> None:
+    """Recorta `widget` con esquinas redondeadas (útil para el widget nativo de VTK)."""
+    rect = QRectF(0, 0, widget.width(), widget.height())
+    path = QPainterPath()
+    path.addRoundedRect(rect, radius, radius)
+    widget.setMask(QRegion(path.toFillPolygon().toPolygon()))
 
 
 # -- Iconos -------------------------------------------------------------
@@ -216,6 +292,29 @@ def _draw_icon(name: str, color: str) -> QPixmap:
         p.drawPath(path)
         p.drawLine(QPointF(32, 25), QPointF(32, 38))
         p.drawPoint(QPointF(32, 45))
+    elif name == "layers":
+        # Dos rombos apilados: "varios modelos en la misma vista".
+        top = QPainterPath()
+        top.moveTo(32, 10)
+        top.lineTo(56, 24)
+        top.lineTo(32, 38)
+        top.lineTo(8, 24)
+        top.closeSubpath()
+        p.drawPath(top)
+        low = QPainterPath()
+        low.moveTo(8, 36)
+        low.lineTo(32, 50)
+        low.lineTo(56, 36)
+        p.drawPath(low)
+    elif name in ("eye", "eye-off"):
+        eye = QPainterPath()
+        eye.moveTo(6, 32)
+        eye.quadTo(32, 6, 58, 32)
+        eye.quadTo(32, 58, 6, 32)
+        p.drawPath(eye)
+        p.drawEllipse(QPointF(32, 32), 8, 8)
+        if name == "eye-off":
+            p.drawLine(QPointF(12, 54), QPointF(54, 10))
     p.end()
     return pm
 

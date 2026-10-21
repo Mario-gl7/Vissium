@@ -55,13 +55,17 @@ segundo plano.
      se respeta (importante en CBCT, donde el espaciado entre cortes
      suele ser mucho mayor que dentro del plano: sin esto, las vistas
      sagital/coronal saldrían distorsionadas).
-   - **STL/PLY**: modelo 3D sólido interactivo (arrastra para rotar,
-     rueda para zoom), con sus estadísticas (vértices, triángulos,
-     tamaño) superpuestas en la esquina.
+   - **STL/PLY**: modelo 3D sólido interactivo: **clic derecho + arrastrar
+     = girar**, rueda = zoom (los modelos nunca se desplazan), con sus
+     estadísticas (vértices, triángulos, tamaño) superpuestas en la
+     esquina. El botón **Dos STL** de la cabecera pone un segundo STL/PLY
+     en la misma vista (otra pestaña abierta o un archivo): **clic
+     izquierdo = seleccionar** el modelo bajo el cursor; el panel
+     "Modelos" permite ocultarlos y cambiar la opacidad del seleccionado.
    - **Imágenes** (PNG, JPG, BMP, GIF, TIFF, WEBP, ICO): se ajustan a
      la ventana; rueda = zoom, arrastrar = desplazar, doble clic =
      ajustar/100 %, flechas = imagen anterior/siguiente de la carpeta.
-4. La barra de iconos de la izquierda actúa sobre la pestaña activa:
+4. La barra lateral de la izquierda actúa sobre la pestaña activa:
    explorador manual, mostrar/ocultar las guías de cruce (DICOM) y
    restablecer la vista (zoom/pan en DICOM, cámara en STL/PLY).
 5. Volver a pulsar Espacio sobre algo ya abierto simplemente cambia a
@@ -163,10 +167,10 @@ vissium/
   file_browser.py            Explorador de archivos propio (solo para el modo de respaldo)
   file_types.py              Detección de tipo: serie DICOM / DICOM suelto / STL / PLY / imagen
   volume.py                  Reconstrucción del volumen 3D, listado de series y extracción de cortes MPR
-  theme.py                   Tema oscuro minimalista: colores, hoja de estilos e iconos de la barra lateral
+  theme.py                   Tema oscuro estilo Linear: colores, hoja de estilos (tarjeta, cajas redondeadas) e iconos
   viewers/
     dicom_viewer.py            Visor MPR (axial + sagital + coronal) con panel de información y selector de series
-    mesh_viewer.py              Visor 3D sólido de STL/PLY (VTK)
+    mesh_viewer.py              Visor 3D sólido de STL/PLY (VTK), con modo de dos modelos a la vez
     image_viewer.py             Visor de imágenes (PNG, JPG, ...) con zoom, desplazamiento y navegación
   assets/
     icon.ico / icon.png        Icono de la app (bandeja del sistema y .exe)

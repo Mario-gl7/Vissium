@@ -9,6 +9,59 @@ Ver `README.md`. Rutas relevantes: raíz (`main.py`, `volume.py`, `file_types.py
 `preview_window.py`, ...) y `viewers/` (`dicom_viewer.py`, `mesh_viewer.py`,
 `image_viewer.py`).
 
+## 2026-10-21 — Interfaz estilo Linear, dos STL en la misma vista y nueva navegación STL
+
+Archivos modificados: `theme.py`, `preview_window.py`, `viewers/mesh_viewer.py`,
+`viewers/dicom_viewer.py`, `viewers/image_viewer.py`, `test_app.py`, `README.md`,
+`readme-cloude.md`.
+
+### Estilo (referencia: Linear, captura enviada por Mario)
+- Mismos colores (fondo casi negro, acento índigo `#7b86e8`, colores de plano). Se
+  añaden `CARD` (`#131416`), líneas más claras (`LINE` `#2f3035`, `LINE_STRONG`
+  `#45464c`), `RADIUS` (10) y `RADIUS_CARD` (12). Todo sigue en hexadecimal
+  (`main.py` usa `QColor(LINE)` en el splash).
+- La hoja de estilos hace los widgets TRANSPARENTES por defecto: el fondo lo ponen
+  la ventana (`BG`), la tarjeta `#card` y cada celda. Si un widget nuevo sale sin
+  fondo, darle uno explícito.
+- `preview_window.py`: barra lateral de 150 px con el nombre de la app y botones de
+  texto + icono ("Abrir carpeta", "Guías", "Restablecer"; antes eran solo iconos) y,
+  a su derecha, una tarjeta redondeada con línea fina que contiene las pestañas (la
+  activa en píldora) y las vistas. Las pestañas siguen arriba, en la cabecera de la
+  tarjeta (no se pasaron a la barra lateral). Los botones conservan sus nombres
+  (`btn_browser`, `btn_guides`, `btn_reset`) y ahora son `QPushButton`.
+- DICOM: cada vista y el panel de información son cajas con borde de 1 px y
+  esquinas de 10 px, separadas por 8 px (antes 1 px de hueco).
+- Imágenes: el lienzo se recorta con esquinas redondeadas y borde fino.
+- Nuevos iconos de línea: `layers`, `eye`, `eye-off`; nueva `theme.rounded_mask()`.
+
+### Visor STL (viewers/mesh_viewer.py, reescrito)
+- Botón **"Dos STL"** (píldora, arriba a la derecha): ofrece los demás STL abiertos
+  en otras pestañas + "Examinar archivo…". Ya con dos modelos, el botón pasa a
+  "Quitar el segundo". Máximo dos modelos por vista.
+- Cada modelo con su color (gris claro y verde azulado). Los modelos conservan sus
+  coordenadas originales (si vienen del mismo escáner quedan en su posición relativa
+  real). Panel "Modelos" a la derecha: seleccionar, ocultar (ojo) y opacidad del
+  seleccionado. El seleccionado lleva una caja índigo y sus estadísticas en la esquina.
+- El título de la pestaña pasa a "A + B" (señal `titleChanged`); la ventana principal
+  le da la lista de STL abiertos (`PreviewWindow._other_meshes`).
+- **Navegación (pedida por Mario):** clic izquierdo = seleccionar el STL bajo el
+  cursor (no mueve ni gira nada); clic derecho + arrastrar = GIRAR la vista; rueda =
+  zoom; botón central = nada. "Mover la vista" significa girar: los modelos NUNCA se
+  desplazan. Implementado en `_MeshStyle` (observadores de VTK); además se anulan los
+  atajos de teclado de VTK (w = alambre, etc.).
+- El widget de VTK es una ventana nativa: se recorta con `rounded_mask` (en el
+  evento de redimensionado) y el borde lo dibuja `_MeshFrame`. El fondo de la escena
+  pasa a negro (como las vistas DICOM).
+
+### Pruebas
+- `test_app.py`: 4 pruebas nuevas (dos STL y título de pestaña, STL abiertos
+  ofrecidos para comparar, clic izquierdo selecciona / derecho gira / izquierdo y
+  central no mueven la cámara, colores válidos). 12 pruebas en total, con Qt real
+  bajo Xvfb (`QT_QPA_PLATFORM=xcb xvfb-run pytest`); revisadas también capturas de
+  pantalla de DICOM, STL (uno y dos), imágenes, bienvenida y explorador manual.
+- No probado en Windows real (DPI/escalado, barra de título) ni con el .exe:
+  reconstruir con `build.bat`. Sin cambios de versión: sube `version.py` al publicar.
+
 ## 2026-10-13 — Series que no se detectaban, avisos junto a la info, más datos del CBCT e imágenes
 
 Archivos modificados: `file_types.py`, `volume.py`, `viewers/dicom_viewer.py`,
