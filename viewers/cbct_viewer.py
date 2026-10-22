@@ -1,13 +1,25 @@
-"""Reconstrucción superficial 3D a partir del volumen CBCT activo."""
+"""Reconstrucción superficial 3D a partir del volumen CBCT activo.
+
+La ventana tiene el mismo diseño que las vistas MPR (caja negra con borde fino y
+esquinas redondeadas, cabecera con el título) y se puede maximizar igual: doble
+clic sobre el modelo o el botón de la cabecera. El umbral óseo es una cápsula en la
+cabecera: el botón (iconos de regletas) la abre o la recoge.
+"""
 from __future__ import annotations
 
 import numpy as np
 import vtk
 from vtkmodules.qt.QVTKRenderWindowInteractor import QVTKRenderWindowInteractor
 from vtkmodules.util.numpy_support import numpy_to_vtk
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QPushButton, QSlider,
-                               QVBoxLayout, QWidget)
+from PySide6.QtCore import QEvent, QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtGui import QPainterPath, QRegion
+from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QSizePolicy, QSlider,
+                               QToolButton, QVBoxLayout, QWidget)
+
+from theme import RADIUS, icon
+
+CAPSULE_OPEN_MAX = 320     # ancho máximo de la cápsula con el deslizador visible
+CAPSULE_CLOSED = 28        # ancho de la cápsula recogida (solo el botón)
 
 
 class _PanZoomStyle(vtk.vtkInteractorStyleTrackballCamera):
@@ -33,38 +45,81 @@ class _PanZoomStyle(vtk.vtkInteractorStyleTrackballCamera):
 class CBCTViewer(QWidget):
     """Isosuperficie ósea interactiva derivada del volumen DICOM activo."""
 
+    maximizeRequested = Signal()   # doble clic o botón de la cabecera
+
     def __init__(self, volume, parent=None):
         super().__init__(parent)
-        self.setObjectName("cbctViewer")
+        self.setObjectName("cbctView")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self.setMinimumSize(0, 0)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         self._started = False
-        self._vtk_widget = QVTKRenderWindowInteractor(self)
-        frame = QFrame(self)
-        frame.setObjectName("cbctFrame")
-        layout = QVBoxLayout(frame)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(self._vtk_widget)
+
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(8)
-        controls = QHBoxLayout()
-        controls.setContentsMargins(4, 0, 4, 0)
-        controls.setSpacing(10)
-        self.threshold_button = QPushButton("Umbral", self)
-        self.threshold_button.setObjectName("pill")
+        outer.setContentsMargins(1, 1, 1, 1)   # deja ver el borde redondeado de la caja
+        outer.setSpacing(0)
+
+        # -- Cabecera: título, cápsula del umbral y botón de maximizar ---------
+        header = QHBoxLayout()
+        header.setContentsMargins(8, 5, 6, 4)
+        header.setSpacing(8)
+        title = QLabel("3D", self)
+        title.setObjectName("cbctTitle")
+        header.addWidget(title)
+
+        self.threshold_capsule = QFrame(self)
+        self.threshold_capsule.setObjectName("thresholdCapsule")
+        self.threshold_capsule.setProperty("open", True)
+        self.threshold_capsule.setFixedHeight(28)
+        self.threshold_capsule.setMaximumWidth(CAPSULE_OPEN_MAX)
+        capsule = QHBoxLayout(self.threshold_capsule)
+        capsule.setContentsMargins(3, 0, 8, 0)
+        capsule.setSpacing(8)
+        self.threshold_button = QToolButton(self.threshold_capsule)
+        self.threshold_button.setObjectName("thresholdToggle")
+        self.threshold_button.setIcon(icon("sliders"))
+        self.threshold_button.setIconSize(QSize(14, 14))
+        self.threshold_button.setFixedSize(22, 22)
         self.threshold_button.setCheckable(True)
         self.threshold_button.setChecked(True)
+        self.threshold_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.threshold_button.setToolTip("Mostrar u ocultar el ajuste de umbral óseo")
-        self.threshold_slider = QSlider(Qt.Orientation.Horizontal, self)
+        self.threshold_button.setAccessibleName("Mostrar u ocultar el ajuste de umbral")
+        self.threshold_label = QLabel("UMBRAL", self.threshold_capsule)
+        self.threshold_label.setObjectName("thresholdLabel")
+        self.threshold_slider = QSlider(Qt.Orientation.Horizontal, self.threshold_capsule)
+        self.threshold_slider.setObjectName("thresholdSlider")
         self.threshold_slider.setRange(0, 1000)
+        self.threshold_slider.setMinimumWidth(60)
         self.threshold_slider.setToolTip("Ajusta el umbral de intensidad para reducir el ruido")
-        self.threshold_value = QLabel(self)
-        self.threshold_value.setMinimumWidth(56)
-        self.threshold_value.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        controls.addWidget(self.threshold_button)
-        controls.addWidget(self.threshold_slider, 1)
-        controls.addWidget(self.threshold_value)
-        outer.addLayout(controls)
-        outer.addWidget(frame)
+        self.threshold_slider.setAccessibleName("Umbral de intensidad")
+        self.threshold_value = QLabel(self.threshold_capsule)
+        self.threshold_value.setObjectName("thresholdValue")
+        self.threshold_value.setMinimumWidth(46)
+        self.threshold_value.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        capsule.addWidget(self.threshold_button)
+        capsule.addWidget(self.threshold_label)
+        capsule.addWidget(self.threshold_slider, 1)
+        capsule.addWidget(self.threshold_value)
+        header.addWidget(self.threshold_capsule, 1, Qt.AlignmentFlag.AlignRight)
+
+        self.maximize_button = QToolButton(self)
+        self.maximize_button.setObjectName("cbctMax")
+        self.maximize_button.setIcon(icon("maximize"))
+        self.maximize_button.setIconSize(QSize(14, 14))
+        self.maximize_button.setAutoRaise(True)
+        self.maximize_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.maximize_button.setToolTip("Maximizar la vista 3D (o doble clic sobre el modelo)")
+        self.maximize_button.setAccessibleName("Maximizar la vista 3D")
+        self.maximize_button.clicked.connect(self.maximizeRequested)
+        header.addWidget(self.maximize_button)
+        outer.addLayout(header)
+
+        # -- Escena VTK (widget nativo): se recorta con esquinas inferiores redondeadas --
+        self._vtk_widget = QVTKRenderWindowInteractor(self)
+        self._vtk_widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self._vtk_widget.installEventFilter(self)
+        outer.addWidget(self._vtk_widget, 1)
 
         data = np.asarray(volume.array)
         # Reduce muestras para que series CBCT grandes no bloqueen el visor.
@@ -98,7 +153,7 @@ class CBCTViewer(QWidget):
                                  / (self._threshold_max - self._threshold_min)))
         self.threshold_slider.setValue(slider_value)
         self._update_threshold_label(slider_value)
-        self.threshold_button.toggled.connect(self.threshold_slider.setVisible)
+        self.threshold_button.toggled.connect(self._on_threshold_toggled)
         self.threshold_slider.valueChanged.connect(self._queue_threshold_update)
         self._threshold_timer = QTimer(self)
         self._threshold_timer.setSingleShot(True)
@@ -131,12 +186,55 @@ class CBCTViewer(QWidget):
         actor.GetProperty().SetDiffuse(0.82)
 
         renderer = vtk.vtkRenderer()
-        renderer.SetBackground(0.035, 0.038, 0.045)
+        renderer.SetBackground(0.0, 0.0, 0.0)   # como las vistas DICOM
         renderer.AddActor(actor)
         renderer.ResetCamera()
         render_window = self._vtk_widget.GetRenderWindow()
         render_window.AddRenderer(renderer)
         renderer.ResetCamera()
+
+    # ------------------------------------------------------------------
+    # Interfaz
+    # ------------------------------------------------------------------
+    def eventFilter(self, obj, event):
+        if obj is self._vtk_widget:
+            kind = event.type()
+            if kind == QEvent.Type.Resize:
+                self._round_bottom_corners()
+            elif kind == QEvent.Type.MouseButtonDblClick and \
+                    event.button() == Qt.MouseButton.LeftButton:
+                # Fuera del evento: maximizar recoloca widgets y no debe ocurrir dentro de VTK.
+                QTimer.singleShot(0, self.maximizeRequested.emit)
+                return True
+        return super().eventFilter(obj, event)
+
+    def _round_bottom_corners(self):
+        """El widget nativo de VTK cuelga de la cabecera: solo se redondean las esquinas de abajo."""
+        w, h = self._vtk_widget.width(), self._vtk_widget.height()
+        radius = RADIUS - 1
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(0, 0, w, h), radius, radius)
+        # Se une una franja recta arriba (sin coordenadas negativas: el recorte de un
+        # widget nativo debe quedarse dentro de su ventana).
+        region = QRegion(path.toFillPolygon().toPolygon()).united(QRegion(0, 0, w, radius * 2))
+        self._vtk_widget.setMask(region)
+
+    def _on_threshold_toggled(self, open_: bool):
+        self.threshold_label.setVisible(open_)
+        self.threshold_slider.setVisible(open_)
+        self.threshold_value.setVisible(open_)
+        self.threshold_capsule.setMaximumWidth(CAPSULE_OPEN_MAX if open_ else CAPSULE_CLOSED)
+        self.threshold_capsule.setProperty("open", open_)
+        style = self.threshold_capsule.style()
+        style.unpolish(self.threshold_capsule)
+        style.polish(self.threshold_capsule)
+
+    def set_maximized(self, maximized: bool):
+        """Cambia el icono y el texto del botón de la cabecera (lo llama el visor DICOM)."""
+        self.maximize_button.setIcon(icon("restore" if maximized else "maximize"))
+        tip = "Restaurar la vista 3D" if maximized else "Maximizar la vista 3D (o doble clic sobre el modelo)"
+        self.maximize_button.setToolTip(tip)
+        self.maximize_button.setAccessibleName(tip)
 
     def start(self):
         if not self._started:

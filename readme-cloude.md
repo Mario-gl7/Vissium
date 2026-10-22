@@ -9,6 +9,58 @@ Ver `README.md`. Rutas relevantes: raíz (`main.py`, `volume.py`, `file_types.py
 `preview_window.py`, ...) y `viewers/` (`dicom_viewer.py`, `mesh_viewer.py`,
 `image_viewer.py`).
 
+## 2026-10-22 — Rediseño de la ventana 3D del CBCT, del botón Studio, del umbral y de la calavera
+
+Archivos modificados: `theme.py`, `viewers/cbct_viewer.py`, `viewers/dicom_viewer.py`,
+`viewers/studio_panel.py` (nuevo), `test_app.py`, `README.md`, `readme-cloude.md`.
+Base: `master` (v2.1.2, ya con el CBCT 3D y Studio).
+
+### Ventana 3D (viewers/cbct_viewer.py)
+- Mismo diseño que las vistas MPR: caja negra con borde fino y esquinas de 10 px
+  (`#cbctView` en `theme.py`), cabecera con el título "3D" y fondo de escena negro
+  (antes casi negro y sin marco). El widget de VTK es nativo: se recorta solo por
+  abajo (`_round_bottom_corners`). OJO: la máscara NO puede tener coordenadas
+  negativas (en X11 recortaba la cabecera).
+- Se maximiza como las demás: doble clic sobre el modelo o botón de la cabecera
+  (señal `maximizeRequested`). `DicomViewer` mete la ventana en `_plane_positions`
+  con la clave `"cbct"` (sustituye a `"info"` mientras el 3D está activo), así que
+  `_toggle_maximize("cbct")` funciona igual que con axial/sagital/coronal.
+  Al activar o desactivar el 3D con una vista maximizada, primero se restaura la rejilla.
+- Umbral: ya no es un botón + deslizador sueltos. Es una **cápsula** en la cabecera
+  (icono de regletas, "UMBRAL", deslizador con relleno degradado índigo y asa con aro,
+  valor en una pastilla de tipografía monoespaciada). El botón de regletas la recoge
+  (queda un círculo) o la abre. Nombres conservados: `threshold_button`,
+  `threshold_slider`, `threshold_value`. La lógica del umbral no cambia.
+- Interacción 3D sin tocar: clic derecho = desplazar, rueda = zoom, izquierdo = nada.
+
+### Botón flotante y panel Studio (viewers/studio_panel.py, nuevo)
+- `StudioLauncher`: botón **circular de 52 px** abajo a la derecha (como el de un chat
+  de ayuda en una web), con degradado, borde fino, icono de paciente, borde índigo al
+  pasar el ratón o con foco. Es el estado "minimizado".
+- `StudioPanel`: ventana con el diseño de las celdas (fondo de tarjeta, línea fina,
+  esquinas de 12 px), cabecera con "Studio" + nombre del paciente y botones minimizar /
+  maximizar / volver a la vista del paciente. Dentro va el `_InfoPanel` (ahora sin caja
+  doble: `set_flat(True)`). Por defecto su altura no tapa la cabecera de la vista 3D
+  (el umbral sigue accesible); para verlo grande, maximizar.
+- Ambos son ventanas nativas (`WA_NativeWindow`) porque flotan sobre el widget nativo
+  de VTK (antes quedaban restos de pintura). Se pintan a mano y se recortan con máscara.
+- `DicomViewer`: `studio_launcher`, `studio` (StudioPanel), `_patient_name()`,
+  `_layout_studio/_minimize_studio/_restore_studio/_maximize_studio` reescritos. Se
+  conservan `studio_minimized`, `studio_maximized` y `set_cbct_3d_visible`.
+
+### Iconos (theme.py)
+- Calavera nueva (curvas suaves, órbitas rellenas, nariz y tres dientes); se ilumina
+  con el acento cuando el botón "CBCT 3D" está activo. Nuevos: `patient`, `sliders`;
+  nueva `icon_pixmap(nombre, color, tamaño)`.
+
+### Pruebas
+- `test_app.py`: 5 pruebas nuevas (botón flotante, abrir/maximizar/minimizar Studio,
+  maximizar la ventana 3D, cápsula del umbral, apagar el 3D devuelve el panel a la
+  rejilla). 17 pruebas en total con Qt real bajo Xvfb
+  (`QT_QPA_PLATFORM=xcb xvfb-run pytest`); revisadas capturas reales de pantalla.
+- No probado en Windows real (DPI/escalado, máscaras de ventanas nativas) ni con el
+  .exe: reconstruir con `build.bat`. Sin cambios de versión: sube `version.py` al publicar.
+
 ## 2026-10-21 — Interfaz estilo Linear, dos STL en la misma vista y nueva navegación STL
 
 Archivos modificados: `theme.py`, `preview_window.py`, `viewers/mesh_viewer.py`,

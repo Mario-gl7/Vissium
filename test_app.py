@@ -175,3 +175,75 @@ def test_theme_colors_are_valid_for_qcolor():
     import theme
     for name in ("BG", "CARD", "LINE", "LINE_STRONG", "ACCENT", "CELL_BG"):
         assert QColor(getattr(theme, name)).isValid(), name
+
+
+# -- CBCT 3D: ventana con el diseño de las vistas y Studio flotante --------------
+def _open_cbct(qtbot, window, fixtures):
+    window.open_preview(str(fixtures / "dicom_flat"))
+    _wait_loaded(qtbot, window, 1)
+    window.btn_skull.setChecked(True)
+    QApplication.processEvents()
+    return window.tabs.currentWidget()
+
+
+def test_cbct_studio_starts_as_floating_button(qtbot, window, fixtures):
+    dv = _open_cbct(qtbot, window, fixtures)
+    assert dv.cbct_viewer is not None and dv.cbct_viewer.isVisible()
+    assert dv.studio_launcher.isVisible() and not dv.studio.isVisible()
+    # El botón flotante queda en la esquina inferior derecha del visor.
+    assert dv.studio_launcher.x() > dv.width() / 2 and dv.studio_launcher.y() > dv.height() / 2
+    assert dv.studio_launcher.accessibleName()
+
+
+def test_cbct_studio_opens_maximizes_and_collapses(qtbot, window, fixtures):
+    dv = _open_cbct(qtbot, window, fixtures)
+    dv.studio_launcher.click()
+    assert dv.studio.isVisible() and not dv.studio_launcher.isVisible()
+    assert dv.info_panel.parent() is dv.studio
+    assert "PRUEBA" in dv.studio.subtitle.text()
+    normal = dv.studio.geometry()
+    dv.studio.btn_maximize.click()
+    QApplication.processEvents()
+    assert dv.studio.width() > normal.width() and dv.studio_maximized
+    dv.studio.btn_maximize.click()
+    QApplication.processEvents()
+    assert dv.studio.geometry() == normal
+    dv.studio.btn_minimize.click()
+    assert dv.studio_launcher.isVisible() and not dv.studio.isVisible()
+
+
+def test_cbct_window_maximizes_like_the_other_views(qtbot, window, fixtures):
+    dv = _open_cbct(qtbot, window, fixtures)
+    cell = dv.cbct_viewer
+    small = cell.size()
+    cell.maximizeRequested.emit()
+    QApplication.processEvents()   # el reparto de la rejilla se aplica al volver al bucle de eventos
+    assert dv._maximized == "cbct"
+    assert cell.width() > small.width() and not dv.axial_view.isVisible()
+    cell.maximizeRequested.emit()
+    QApplication.processEvents()
+    assert dv._maximized is None and dv.axial_view.isVisible()
+
+
+def test_cbct_threshold_capsule_toggles(qtbot, window, fixtures):
+    dv = _open_cbct(qtbot, window, fixtures)
+    cell = dv.cbct_viewer
+    assert cell.threshold_slider.isVisible()
+    cell.threshold_button.setChecked(False)
+    assert not cell.threshold_slider.isVisible()
+    assert cell.threshold_capsule.maximumWidth() < 60
+    cell.threshold_button.setChecked(True)
+    assert cell.threshold_slider.isVisible()
+
+
+def test_cbct_off_returns_info_panel_to_grid(qtbot, window, fixtures):
+    dv = _open_cbct(qtbot, window, fixtures)
+    dv._toggle_maximize("cbct")           # también debe poder cerrarse maximizado
+    window.btn_skull.setChecked(False)
+    QApplication.processEvents()
+    assert not dv.studio.isVisible() and not dv.studio_launcher.isVisible()
+    assert dv.info_panel.parent() is dv and dv.info_panel.isVisible()
+    assert dv._maximized is None and "info" in dv._plane_positions
+    window.btn_skull.setChecked(True)     # y volver a abrirlo
+    QApplication.processEvents()
+    assert dv.studio_launcher.isVisible()

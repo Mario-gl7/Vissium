@@ -15,7 +15,8 @@ depender de fuentes de iconos del sistema.
   fondo lo ponen la ventana (`BG`), la tarjeta (`#card`) y cada celda.
 - `icon(nombre)`: icono de línea fina ("folder", "crosshair", "refresh", "close",
   "image", "cube", "loading", "warning", "layers", "eye", "eye-off",
-  "skull", "minimize", "maximize", "restore", "switch") con
+  "skull", "patient", "sliders", "minimize", "maximize", "restore",
+  "switch") con
   estados apagado / activo / deshabilitado.
 - `rounded_mask(widget, radio)`: recorta con esquinas redondeadas un widget con
   ventana nativa (el de VTK), que de otro modo se vería con esquinas cuadradas.
@@ -202,6 +203,50 @@ QPushButton#modelRow:hover {{ background-color: {HOVER_BG}; }}
 QPushButton#modelRow:checked {{ background-color: {HOVER_BG}; border: 1px solid {LINE}; color: {TEXT}; }}
 QToolButton#modelEye {{ padding: 4px; border-radius: 6px; }}
 
+/* Ventana 3D (CBCT): cápsula del umbral y botones de la cabecera. */
+#cbctView {{ background-color: {CELL_BG}; border: 1px solid {LINE}; border-radius: {RADIUS}px; }}
+#cbctTitle {{ color: {ACCENT_TEXT}; font-size: 11px; }}
+#cbctHint {{ color: {TEXT_MUTED}; font-size: 11px; }}
+#thresholdCapsule {{
+    background-color: {FIELD_BG}; border: 1px solid {LINE_STRONG}; border-radius: 14px;
+}}
+#thresholdCapsule[open='false'] {{ background-color: {FIELD_BG}; }}
+#thresholdCapsule[open='true'] {{ border: 1px solid {ACCENT}; background-color: {ACCENT_SOFT}; }}
+QToolButton#thresholdToggle {{
+    background: transparent; border: 0; border-radius: 11px; padding: 3px;
+}}
+QToolButton#thresholdToggle:hover {{ background-color: {LINE}; }}
+QToolButton#thresholdToggle:focus {{ border: 1px solid {ACCENT}; }}
+#thresholdLabel {{ color: {ACCENT_TEXT}; font-size: 10px; font-weight: 600; letter-spacing: 1px; }}
+#thresholdValue {{
+    background-color: {BG}; border: 1px solid {LINE}; border-radius: 9px;
+    padding: 1px 8px; color: {TEXT};
+    font-family: "Cascadia Mono", Consolas, monospace; font-size: 11px;
+}}
+QSlider#thresholdSlider::groove:horizontal {{ background: {LINE_STRONG}; height: 4px; border-radius: 2px; }}
+QSlider#thresholdSlider::sub-page:horizontal {{
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #4d57b8, stop:1 {ACCENT});
+    height: 4px; border-radius: 2px;
+}}
+QSlider#thresholdSlider::handle:horizontal {{
+    background: {TEXT}; border: 3px solid {ACCENT}; width: 8px; height: 8px;
+    margin: -6px 0; border-radius: 7px;
+}}
+QSlider#thresholdSlider::handle:horizontal:hover {{ background: #ffffff; border-color: {ACCENT_TEXT}; }}
+QSlider#thresholdSlider::handle:horizontal:focus {{ border-color: #ffffff; }}
+QToolButton#cbctMax {{ padding: 4px; border-radius: 8px; }}
+
+/* Panel flotante Studio: botones de la cabecera y contenido sin caja doble. */
+QToolButton#studioBtn {{
+    background: transparent; border: 1px solid transparent; border-radius: 8px; padding: 4px;
+}}
+QToolButton#studioBtn:hover {{ background-color: {LINE}; }}
+QToolButton#studioBtn:focus {{ border: 1px solid {ACCENT}; }}
+#studioTitle {{ font-weight: 600; color: {TEXT}; font-size: 13px; }}
+#studioSubtitle {{ color: {TEXT_MUTED}; font-size: 11px; }}
+#studioRule {{ background-color: {LINE}; }}
+#infoCell[flat='true'] {{ background-color: transparent; border: 0; }}
+
 #emptyState {{ background: transparent; }}
 #emptyTitle {{ font-size: 22px; font-weight: 600; color: {TEXT}; }}
 #emptyHint {{ font-size: 13px; color: {TEXT_DIM}; }}
@@ -283,34 +328,48 @@ def _draw_icon(name: str, color: str) -> QPixmap:
         p.drawLine(QPointF(54, 20), QPointF(32, 32))
         p.drawLine(QPointF(32, 32), QPointF(32, 56))
     elif name == "skull":
-        # Perfil frontal simplificado de cráneo, legible también a 16 px.
+        # Cráneo de curvas suaves: bóveda redondeada, órbitas rellenas, nariz y dientes.
+        # Se lee bien también a 16 px (las órbitas rellenas dan el contraste).
         path = QPainterPath()
-        path.moveTo(18, 49)
-        path.lineTo(16, 43)
-        path.lineTo(11, 39)
-        path.lineTo(9, 31)
-        path.lineTo(11, 21)
-        path.lineTo(17, 13)
-        path.lineTo(25, 9)
-        path.lineTo(39, 9)
-        path.lineTo(47, 13)
-        path.lineTo(53, 21)
-        path.lineTo(55, 31)
-        path.lineTo(53, 39)
-        path.lineTo(48, 43)
-        path.lineTo(46, 49)
-        path.lineTo(40, 49)
-        path.lineTo(40, 44)
-        path.lineTo(24, 44)
-        path.lineTo(24, 49)
+        path.moveTo(21, 54)
+        path.lineTo(21, 47)
+        path.cubicTo(12, 43, 8, 36, 8, 28)
+        path.cubicTo(8, 14, 19, 6, 32, 6)
+        path.cubicTo(45, 6, 56, 14, 56, 28)
+        path.cubicTo(56, 36, 52, 43, 43, 47)
+        path.lineTo(43, 54)
         path.closeSubpath()
         p.drawPath(path)
-        p.drawEllipse(QPointF(22, 29), 4, 5)
-        p.drawEllipse(QPointF(42, 29), 4, 5)
-        p.drawLine(QPointF(32, 33), QPointF(29, 39))
-        p.drawLine(QPointF(35, 39), QPointF(29, 39))
-        p.drawLine(QPointF(28, 46), QPointF(28, 51))
-        p.drawLine(QPointF(36, 46), QPointF(36, 51))
+        p.setBrush(QColor(color))
+        p.drawEllipse(QPointF(23.5, 29), 5.2, 6.2)
+        p.drawEllipse(QPointF(40.5, 29), 5.2, 6.2)
+        nose = QPainterPath()
+        nose.moveTo(32, 36)
+        nose.lineTo(29.5, 42)
+        nose.lineTo(34.5, 42)
+        nose.closeSubpath()
+        p.drawPath(nose)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawLine(QPointF(27.5, 48), QPointF(27.5, 54))
+        p.drawLine(QPointF(32, 48), QPointF(32, 54))
+        p.drawLine(QPointF(36.5, 48), QPointF(36.5, 54))
+    elif name == "patient":
+        # Cabeza y hombros dentro de un círculo: "datos del paciente".
+        p.drawEllipse(QPointF(32, 32), 24, 24)
+        p.drawEllipse(QPointF(32, 25), 7, 7)
+        shoulders = QPainterPath()
+        shoulders.moveTo(17.5, 50)
+        shoulders.cubicTo(19, 40, 25, 37, 32, 37)
+        shoulders.cubicTo(39, 37, 45, 40, 46.5, 50)
+        p.drawPath(shoulders)
+    elif name == "sliders":
+        # Dos regletas con su control: ajuste de umbral.
+        p.drawLine(QPointF(8, 20), QPointF(56, 20))
+        p.drawLine(QPointF(8, 44), QPointF(56, 44))
+        p.setBrush(QColor(CARD))
+        p.drawEllipse(QPointF(22, 20), 6, 6)
+        p.drawEllipse(QPointF(42, 44), 6, 6)
+        p.setBrush(Qt.BrushStyle.NoBrush)
     elif name == "minimize":
         p.drawLine(QPointF(16, 44), QPointF(48, 44))
     elif name == "maximize":
@@ -372,6 +431,12 @@ def _draw_icon(name: str, color: str) -> QPixmap:
     return pm
 
 
+def icon_pixmap(name: str, color: str, size: int = 24) -> QPixmap:
+    """Icono de línea de un solo color a `size` px (para widgets que se pintan a mano)."""
+    return _draw_icon(name, color).scaled(
+        size, size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+
+
 def tab_icon(name: str) -> QIcon:
     """Icono pequeño y fijo (sin estados) para las pestañas."""
     return QIcon(_draw_icon(name, TEXT_DIM))
@@ -396,7 +461,8 @@ def make_close_button(callback, parent=None):
 def icon(name: str) -> QIcon:
     """Icono de línea: gris apagado, claro al pasar el ratón o al estar activo."""
     dim = _draw_icon(name, TEXT_MUTED)
-    bright = _draw_icon(name, TEXT)
+    # Los iconos de "modo" (calavera = 3D activo) se iluminan con el acento.
+    bright = _draw_icon(name, ACCENT_TEXT if name == "skull" else TEXT)
     off = _draw_icon(name, ICON_DISABLED)
     qicon = QIcon()
     qicon.addPixmap(dim, QIcon.Mode.Normal, QIcon.State.Off)

@@ -170,6 +170,8 @@ vissium/
   theme.py                   Tema oscuro estilo Linear: colores, hoja de estilos (tarjeta, cajas redondeadas) e iconos
   viewers/
     dicom_viewer.py            Visor MPR (axial + sagital + coronal) con panel de información y selector de series
+    cbct_viewer.py              Ventana 3D del CBCT (superficie ósea, VTK) con cápsula de umbral; se maximiza como las vistas
+    studio_panel.py             Studio: botón flotante circular y panel con los datos del paciente (sobre el visor DICOM)
     mesh_viewer.py              Visor 3D sólido de STL/PLY (VTK), con modo de dos modelos a la vez
     image_viewer.py             Visor de imágenes (PNG, JPG, ...) con zoom, desplazamiento y navegación
   assets/

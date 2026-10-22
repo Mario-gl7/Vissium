@@ -36,7 +36,6 @@ from PySide6.QtWidgets import (
     QComboBox,
     QFrame,
     QGridLayout,
-    QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -60,6 +59,7 @@ from theme import (
 )
 from volume import DicomLoadError, SeriesInfo, Volume, load_volume, series_labels
 from viewers.cbct_viewer import CBCTViewer
+from viewers.studio_panel import StudioLauncher, StudioPanel
 
 log = logging.getLogger("vissium.dicom")
 
@@ -634,6 +634,13 @@ class _InfoPanel(QWidget):
         layout.addLayout(self.details)
         layout.addStretch(1)
 
+    def set_flat(self, flat: bool):
+        """Sin caja propia (borde y fondo) cuando va dentro del panel flotante Studio."""
+        self.setProperty("flat", bool(flat))
+        style = self.style()
+        style.unpolish(self)
+        style.polish(self)
+
     # -- Construcción -----------------------------------------------------
     def _heading(self, text: str, color: str = TEXT_MUTED) -> QLabel:
         label = QLabel(text, self)
@@ -798,69 +805,19 @@ class DicomViewer(QWidget):
         for widget, row, col, rspan, cspan in self._plane_positions.values():
             self.views_grid.addWidget(widget, row, col, rspan, cspan)
 
-        # Panel flotante inspirado en la captura: el contenido del estudio
-        # permanece disponible sobre la vista 3D y se puede minimizar/maximizar.
-        self.studio = QFrame(self)
-        self.studio.setObjectName("studioPanel")
-        self.studio.setStyleSheet(
-            "QFrame#studioPanel { background:#151619; border:1px solid #3b3c42;"
-            " border-radius:12px; }"
-            "QFrame#studioPanel[studioMinimized='true'] { background:transparent; border:0; }"
-            "QPushButton#studioTitle { background:transparent; border:0; padding:4px 6px;"
-            " text-align:left; font-weight:600; }"
-            "QFrame#studioPanel[studioMinimized='true'] QPushButton#studioTitle {"
-            " background:qlineargradient(x1:0,y1:0,x2:0,y2:1,stop:0 #282a2e,stop:1 #1a1b1e);"
-            " border:1px solid #4b4d54; border-bottom:2px solid #090a0b;"
-            " border-radius:12px; padding:8px 12px; text-align:center; color:#f2f2f3; }"
-            "QFrame#studioPanel[studioMinimized='true'] QPushButton#studioTitle:hover {"
-            " border-color:#70727a; color:#ffffff; }"
-            "QFrame#studioPanel[studioMinimized='true'] QPushButton#studioTitle:pressed {"
-            " background:#17181b; border-bottom:1px solid #090a0b; padding-top:9px; }"
-        )
-        studio_layout = QVBoxLayout(self.studio)
-        studio_layout.setContentsMargins(8, 7, 8, 8)
-        studio_layout.setSpacing(4)
-        titlebar = QWidget(self.studio)
-        title_layout = QHBoxLayout(titlebar)
-        title_layout.setContentsMargins(4, 0, 2, 0)
-        title_layout.setSpacing(8)
-        self.studio_title = QPushButton("Studio", titlebar)
-        self.studio_title.setObjectName("studioTitle")
-        self.studio_title.setFlat(True)
-        self.studio_title.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.studio_minimize = QPushButton(titlebar)
-        self.studio_maximize = QPushButton(titlebar)
-        self.studio_close = QPushButton(titlebar)
-        self.studio_minimize.setIcon(icon("minimize"))
-        self.studio_maximize.setIcon(icon("maximize"))
-        self.studio_close.setIcon(icon("switch"))
-        for control, tip in ((self.studio_minimize, "Minimizar Studio"),
-                             (self.studio_maximize, "Maximizar Studio"),
-                             (self.studio_close, "Cambiar a la vista del paciente")):
-            control.setFixedSize(26, 24)
-            control.setFlat(True)
-            control.setIconSize(QSize(14, 14))
-            control.setToolTip(tip)
-            control.setAccessibleName(tip)
-        title_layout.addWidget(self.studio_title, 1)
-        title_layout.addWidget(self.studio_minimize)
-        title_layout.addWidget(self.studio_maximize)
-        title_layout.addWidget(self.studio_close)
-        studio_layout.addWidget(titlebar)
-        self._studio_layout = studio_layout
-        self._studio_title_layout = title_layout
-        self._studio_shadow = QGraphicsDropShadowEffect(self.studio_title)
-        self._studio_shadow.setBlurRadius(16)
-        self._studio_shadow.setOffset(0, 5)
-        self._studio_shadow.setColor(QColor(0, 0, 0, 190))
-        self.studio_title.setGraphicsEffect(self._studio_shadow)
+        # Studio: botón flotante circular (como el de un chat) que abre un panel con
+        # los datos del paciente. Los dos flotan sobre la rejilla (viewers/studio_panel.py).
+        self.studio = StudioPanel(self)
+        self.studio_launcher = StudioLauncher(self)
+        self._studio_layout = self.studio.body_layout
         self.studio_minimized = False
         self.studio_maximized = False
-        self.studio_title.clicked.connect(self._restore_studio)
-        self.studio_minimize.clicked.connect(self._minimize_studio)
-        self.studio_maximize.clicked.connect(self._maximize_studio)
-        self.studio_close.clicked.connect(lambda: self.set_cbct_3d_visible(False))
+        self.studio_launcher.clicked.connect(self._restore_studio)
+        self.studio.minimizeRequested.connect(self._minimize_studio)
+        self.studio.maximizeRequested.connect(self._maximize_studio)
+        self.studio.closeRequested.connect(lambda: self.set_cbct_3d_visible(False))
         self.studio.hide()
+        self.studio_launcher.hide()
 
         self._apply_volume(self.volume)
         self._refresh_series_selector()
@@ -899,104 +856,105 @@ class DicomViewer(QWidget):
     def set_cbct_3d_visible(self, visible: bool):
         if not self.supports_cbct_3d:
             return
+        if self._maximized:
+            self._toggle_maximize(self._maximized)   # vuelve a la rejilla antes de cambiar de modo
         if visible:
             self.views_grid.removeWidget(self.info_panel)
             self.info_panel.setParent(self.studio)
+            self.info_panel.set_flat(True)
             self._studio_layout.addWidget(self.info_panel, 1)
+            self.info_panel.show()
             if self.cbct_viewer is None:
                 self.cbct_viewer = CBCTViewer(self.volume, self)
+                self.cbct_viewer.maximizeRequested.connect(lambda: self._toggle_maximize("cbct"))
             self.views_grid.addWidget(self.cbct_viewer, 1, 1)
+            self._plane_positions["cbct"] = (self.cbct_viewer, 1, 1, 1, 1)
+            del self._plane_positions["info"]
             self.cbct_viewer.show()
             self.cbct_viewer.start()
+            self.studio.set_subtitle(self._patient_name())
+            self.studio.set_maximized(False)
+            self.studio_maximized = False
             self.studio.show()
-            if not self.studio_minimized:
-                self._minimize_studio()
+            self._minimize_studio()   # empieza como botón flotante; el panel se abre al pulsarlo
             self.cbctModeChanged.emit(True)
-            self._layout_studio()
         else:
             if self.cbct_viewer is not None:
                 self.cbct_viewer.hide()
                 self.views_grid.removeWidget(self.cbct_viewer)
+            self._plane_positions.pop("cbct", None)
+            self._plane_positions["info"] = (self.info_panel, 1, 1, 1, 1)
             self._studio_layout.removeWidget(self.info_panel)
             self.info_panel.setParent(self)
+            self.info_panel.set_flat(False)
             if self._is_single():
                 self.views_grid.addWidget(self.info_panel, 0, 1, 2, 1)
             else:
                 self.views_grid.addWidget(self.info_panel, 1, 1)
             self.studio.hide()
+            self.studio_launcher.hide()
             self.info_panel.show()
             self.studio_minimized = False
             self.studio_maximized = False
-            self.studio_minimize.show()
-            self.studio_maximize.show()
-            self.studio_close.show()
-            self.studio_maximize.setIcon(icon("maximize"))
-            self.studio.setProperty("studioMinimized", False)
-            self._studio_shadow.setEnabled(False)
-            self.studio.style().unpolish(self.studio)
-            self.studio.style().polish(self.studio)
             self.cbctModeChanged.emit(False)
 
+    def _patient_name(self) -> str:
+        """Nombre del paciente para el subtítulo del panel Studio."""
+        if self.volume is None:
+            return ""
+        for title, rows in _build_sections(self.volume):
+            if title == "Paciente":
+                for key, value in rows:
+                    if key == "Nombre" and value and value != "—":
+                        return value
+        return ""
+
     def _layout_studio(self):
-        if not self.studio.isVisible():
+        """Coloca el botón flotante o el panel abajo a la derecha (como un chat de una web)."""
+        if not self.studio.isVisible() and not self.studio_launcher.isVisible():
             return
+        margin = 16
         if self.studio_minimized:
-            self.studio.setGeometry(self.width() - 136, self.height() - 72, 124, 60)
-        elif self.studio_maximized:
+            size = self.studio_launcher.SIZE
+            self.studio_launcher.move(self.width() - size - margin, self.height() - size - margin)
+            self.studio_launcher.raise_()
+            return
+        if self.studio_maximized:
             self.studio.setGeometry(12, 12, max(200, self.width() - 24),
                                     max(120, self.height() - 24))
         else:
-            width = min(370, max(300, self.width() - 32))
-            height = min(480, max(220, self.height() - 32))
-            self.studio.setGeometry(self.width() - width - 18,
-                                    self.height() - height - 18, width, height)
+            width = min(380, max(300, self.width() - 32))
+            # Por defecto el panel no tapa la cabecera de la vista 3D (título y umbral):
+            # se queda por debajo de ella; para verlo grande, el botón de maximizar.
+            room = self.height() // 2 - 4 - margin - 44
+            height = min(520, max(220, room))
+            self.studio.setGeometry(self.width() - width - margin,
+                                    self.height() - height - margin, width, height)
         self.studio.raise_()
 
     def _minimize_studio(self):
+        """Panel recogido: solo queda el botón circular flotante."""
         self.studio_minimized = True
         self.studio_maximized = False
-        self.info_panel.hide()
-        self.studio_minimize.hide()
-        self.studio_maximize.hide()
-        self.studio_close.hide()
-        self.studio.setProperty("studioMinimized", True)
-        self._studio_layout.setContentsMargins(6, 3, 6, 10)
-        self._studio_title_layout.setContentsMargins(0, 0, 0, 0)
-        self._studio_shadow.setEnabled(True)
-        self.studio.style().unpolish(self.studio)
-        self.studio.style().polish(self.studio)
+        self.studio.set_maximized(False)
+        self.studio.hide()
+        self.studio_launcher.show()
         self._layout_studio()
 
     def _restore_studio(self):
         if not self.studio_minimized:
             return
         self.studio_minimized = False
-        self.info_panel.show()
-        self.studio_minimize.show()
-        self.studio_maximize.show()
-        self.studio_close.show()
-        self.studio.setProperty("studioMinimized", False)
-        self._studio_layout.setContentsMargins(8, 7, 8, 8)
-        self._studio_title_layout.setContentsMargins(4, 0, 2, 0)
-        self._studio_shadow.setEnabled(False)
-        self.studio.style().unpolish(self.studio)
-        self.studio.style().polish(self.studio)
+        self.studio_launcher.hide()
+        self.studio.show()
         self._layout_studio()
 
     def _maximize_studio(self):
         self.studio_minimized = False
         self.studio_maximized = not self.studio_maximized
-        self.info_panel.show()
-        self.studio_minimize.show()
-        self.studio_maximize.show()
-        self.studio_close.show()
-        self.studio_maximize.setIcon(icon("restore" if self.studio_maximized else "maximize"))
-        self.studio.setProperty("studioMinimized", False)
-        self._studio_layout.setContentsMargins(8, 7, 8, 8)
-        self._studio_title_layout.setContentsMargins(4, 0, 2, 0)
-        self._studio_shadow.setEnabled(False)
-        self.studio.style().unpolish(self.studio)
-        self.studio.style().polish(self.studio)
+        self.studio_launcher.hide()
+        self.studio.set_maximized(self.studio_maximized)
+        self.studio.show()
         self._layout_studio()
 
     def resizeEvent(self, event):
@@ -1040,6 +998,7 @@ class DicomViewer(QWidget):
 
         self.info_panel.set_details(_build_sections(volume))
         self.info_panel.set_warnings(volume.warnings)
+        self.studio.set_subtitle(self._patient_name())
         self._render_all()
         if restore_cbct and self.supports_cbct_3d:
             self.set_cbct_3d_visible(True)
@@ -1163,6 +1122,8 @@ class DicomViewer(QWidget):
         # descentrada fuera de la vista.
         for view in (self.axial_view, self.sagittal_view, self.coronal_view):
             view.image_view.reset_pan()
+        if self.cbct_viewer is not None:
+            self.cbct_viewer.set_maximized(self._maximized == "cbct")
 
         self._render_all()
 
