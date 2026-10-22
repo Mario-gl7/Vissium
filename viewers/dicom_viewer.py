@@ -924,10 +924,8 @@ class DicomViewer(QWidget):
                                     max(120, self.height() - 24))
         else:
             width = min(380, max(300, self.width() - 32))
-            # Por defecto el panel no tapa la cabecera de la vista 3D (título y umbral):
-            # se queda por debajo de ella; para verlo grande, el botón de maximizar.
-            room = self.height() // 2 - 4 - margin - 44
-            height = min(520, max(220, room))
+            # Alargado en vertical (casi toda la altura del visor), como la ventana de un chat.
+            height = min(780, max(260, self.height() - 2 * margin))
             self.studio.setGeometry(self.width() - width - margin,
                                     self.height() - height - margin, width, height)
         self.studio.raise_()

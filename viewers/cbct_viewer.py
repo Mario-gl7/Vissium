@@ -18,28 +18,40 @@ from PySide6.QtWidgets import (QFrame, QHBoxLayout, QLabel, QSizePolicy, QSlider
 
 from theme import RADIUS, icon
 
-CAPSULE_OPEN_MAX = 320     # ancho máximo de la cápsula con el deslizador visible
+CAPSULE_OPEN_MAX = 460     # ancho máximo de la cápsula con el deslizador visible
+SMOOTH_FULL = 12            # suavizado de la superficie en reposo
+SMOOTH_DRAG = 2             # suavizado ligero mientras se arrastra el umbral (más fluido)
+SLIDER_STEPS = 10000       # pasos del deslizador (antes 1000): ajuste fino del umbral
 CAPSULE_CLOSED = 28        # ancho de la cápsula recogida (solo el botón)
 
 
-class _PanZoomStyle(vtk.vtkInteractorStyleTrackballCamera):
-    """Derecho desplaza, rueda acerca y el clic izquierdo no actúa."""
+class _RotateZoomStyle(vtk.vtkInteractorStyleTrackballCamera):
+    """Igual que los STL: clic derecho = girar, rueda = zoom; el modelo nunca se desplaza.
 
-    def OnLeftButtonDown(self):
-        pass
+    Izquierdo y central no hacen nada. Sin atajos de teclado de VTK.
+    """
 
-    def OnLeftButtonUp(self):
-        pass
+    def __init__(self):
+        super().__init__()
+        self._rotating = False
+        for event in ("LeftButtonPressEvent", "LeftButtonReleaseEvent",
+                      "MiddleButtonPressEvent", "MiddleButtonReleaseEvent", "CharEvent"):
+            self.AddObserver(event, lambda *_: None)
+        self.AddObserver("RightButtonPressEvent", self._right_down)
+        self.AddObserver("RightButtonReleaseEvent", self._right_up)
 
-    def OnRightButtonDown(self):
-        interactor = self.GetInteractor()
-        if interactor is not None:
-            self.FindPokedRenderer(*interactor.GetEventPosition())
-        if self.GetCurrentRenderer() is not None:
-            self.StartPan()
+    def _right_down(self, _obj, _event):
+        x, y = self.GetInteractor().GetEventPosition()
+        self.FindPokedRenderer(x, y)
+        if self.GetCurrentRenderer() is None:
+            return
+        self._rotating = True
+        self.StartRotate()
 
-    def OnRightButtonUp(self):
-        self.EndPan()
+    def _right_up(self, _obj, _event):
+        if self._rotating:
+            self._rotating = False
+            self.EndRotate()
 
 
 class CBCTViewer(QWidget):
@@ -81,7 +93,7 @@ class CBCTViewer(QWidget):
         self.threshold_button.setIconSize(QSize(14, 14))
         self.threshold_button.setFixedSize(22, 22)
         self.threshold_button.setCheckable(True)
-        self.threshold_button.setChecked(True)
+        self.threshold_button.setChecked(False)   # recogida por defecto
         self.threshold_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.threshold_button.setToolTip("Mostrar u ocultar el ajuste de umbral óseo")
         self.threshold_button.setAccessibleName("Mostrar u ocultar el ajuste de umbral")
@@ -89,13 +101,15 @@ class CBCTViewer(QWidget):
         self.threshold_label.setObjectName("thresholdLabel")
         self.threshold_slider = QSlider(Qt.Orientation.Horizontal, self.threshold_capsule)
         self.threshold_slider.setObjectName("thresholdSlider")
-        self.threshold_slider.setRange(0, 1000)
+        self.threshold_slider.setRange(0, SLIDER_STEPS)
         self.threshold_slider.setMinimumWidth(60)
+        self.threshold_slider.setPageStep(SLIDER_STEPS // 50)
+        self.threshold_slider.setSingleStep(SLIDER_STEPS // 500)
         self.threshold_slider.setToolTip("Ajusta el umbral de intensidad para reducir el ruido")
         self.threshold_slider.setAccessibleName("Umbral de intensidad")
         self.threshold_value = QLabel(self.threshold_capsule)
         self.threshold_value.setObjectName("thresholdValue")
-        self.threshold_value.setMinimumWidth(46)
+        self.threshold_value.setMinimumWidth(58)
         self.threshold_value.setAlignment(Qt.AlignmentFlag.AlignCenter)
         capsule.addWidget(self.threshold_button)
         capsule.addWidget(self.threshold_label)
@@ -132,6 +146,19 @@ class CBCTViewer(QWidget):
                          volume.slice_spacing * step)
         image.GetPointData().SetScalars(vtk_values)
 
+        # Versión de media resolución: se usa solo mientras se arrastra el umbral, para que
+        # la superficie (cientos de miles de triángulos) siga al deslizador sin tirones.
+        fast_step = 2 if min(sample.shape) >= 64 else 1
+        fast_sample = np.ascontiguousarray(sample[::fast_step, ::fast_step, ::fast_step])
+        fast_image = vtk.vtkImageData()
+        fast_image.SetDimensions(fast_sample.shape[2], fast_sample.shape[1], fast_sample.shape[0])
+        fast_image.SetSpacing(volume.col_spacing * step * fast_step, volume.row_spacing * step * fast_step,
+                              volume.slice_spacing * step * fast_step)
+        fast_image.GetPointData().SetScalars(
+            numpy_to_vtk(fast_sample.ravel(order="C"), deep=True, array_type=vtk.VTK_FLOAT))
+        self._image_full = image
+        self._image_fast = fast_image
+
         # El umbral adaptativo funciona con CBCT exportados tanto en HU como en escala gris.
         values = sample.reshape(-1)
         low = float(np.percentile(values, 25))
@@ -145,19 +172,24 @@ class CBCTViewer(QWidget):
         surface = vtk.vtkFlyingEdges3D()
         surface.SetInputData(image)
         surface.SetValue(0, threshold)
-        surface.ComputeGradientsOn()
+        surface.ComputeGradientsOff()   # las normales se calculan después del suavizado
         surface.ComputeNormalsOff()
         self._surface = surface
         self._threshold_current = threshold
-        slider_value = int(round(1000 * (threshold - self._threshold_min)
+        slider_value = int(round(SLIDER_STEPS * (threshold - self._threshold_min)
                                  / (self._threshold_max - self._threshold_min)))
         self.threshold_slider.setValue(slider_value)
         self._update_threshold_label(slider_value)
         self.threshold_button.toggled.connect(self._on_threshold_toggled)
+        self._on_threshold_toggled(False)
         self.threshold_slider.valueChanged.connect(self._queue_threshold_update)
+        self.threshold_slider.sliderPressed.connect(self._queue_threshold_update)
+        self.threshold_slider.sliderReleased.connect(self._on_threshold_released)
+        # Intervalo 0: se aplica en cuanto el bucle de eventos queda libre, así la vista
+        # sigue al deslizador sin esperar a que se pare (antes 70 ms de espera = tirones).
         self._threshold_timer = QTimer(self)
         self._threshold_timer.setSingleShot(True)
-        self._threshold_timer.setInterval(70)
+        self._threshold_timer.setInterval(0)
         self._threshold_timer.timeout.connect(self._apply_threshold)
 
         smooth = vtk.vtkWindowedSincPolyDataFilter()
@@ -168,6 +200,8 @@ class CBCTViewer(QWidget):
         smooth.FeatureEdgeSmoothingOff()
         smooth.NonManifoldSmoothingOn()
         smooth.NormalizeCoordinatesOn()
+        self._smooth = smooth
+        self._fast_mode = False
 
         normals = vtk.vtkPolyDataNormals()
         normals.SetInputConnection(smooth.GetOutputPort())
@@ -238,7 +272,7 @@ class CBCTViewer(QWidget):
 
     def start(self):
         if not self._started:
-            self._style = _PanZoomStyle()
+            self._style = _RotateZoomStyle()
             interactor = self._vtk_widget.GetRenderWindow().GetInteractor()
             interactor.SetInteractorStyle(self._style)
             self._vtk_widget.Initialize()
@@ -246,18 +280,29 @@ class CBCTViewer(QWidget):
             self._started = True
 
     def _update_threshold_label(self, slider_value: int):
-        value = self._threshold_min + (self._threshold_max - self._threshold_min) * slider_value / 1000
-        self.threshold_value.setText(f"{value:.0f}")
+        value = self._threshold_min + (self._threshold_max - self._threshold_min) * slider_value / SLIDER_STEPS
+        self.threshold_value.setText(f"{value:.1f}")
 
-    def _queue_threshold_update(self, slider_value: int):
-        self._update_threshold_label(slider_value)
-        self._threshold_timer.start()
+    def _queue_threshold_update(self, *_):
+        self._update_threshold_label(self.threshold_slider.value())
+        if not self._threshold_timer.isActive():
+            self._threshold_timer.start()
 
-    def _apply_threshold(self):
-        value = self._threshold_min + (self._threshold_max - self._threshold_min) * self.threshold_slider.value() / 1000
-        if abs(value - self._threshold_current) < 1e-6:
+    def _on_threshold_released(self):
+        """Al soltar el deslizador se recalcula la superficie con el suavizado completo."""
+        self._apply_threshold(force=True)
+
+    def _apply_threshold(self, force: bool = False):
+        value = self._threshold_min + (self._threshold_max - self._threshold_min) * self.threshold_slider.value() / SLIDER_STEPS
+        fast = self.threshold_slider.isSliderDown()
+        if not force and fast == self._fast_mode and abs(value - self._threshold_current) < 1e-6:
             return
         self._threshold_current = value
+        if fast != self._fast_mode:
+            # Arrastrando: media resolución y suavizado ligero. Al soltar: resolución completa.
+            self._fast_mode = fast
+            self._surface.SetInputData(self._image_fast if fast else self._image_full)
+            self._smooth.SetNumberOfIterations(SMOOTH_DRAG if fast else SMOOTH_FULL)
         self._surface.SetValue(0, value)
         self._surface.Modified()
         if self._started:

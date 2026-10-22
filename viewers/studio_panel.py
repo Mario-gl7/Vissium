@@ -2,7 +2,7 @@
 Studio: botón flotante (estilo botón de chat de una web) y su panel con los datos
 del paciente. Ambos flotan sobre el visor DICOM cuando está activo el CBCT 3D.
 
-- `StudioLauncher`: botón circular de 52 px con el icono de paciente. Es el estado
+- `StudioLauncher`: botón circular de 60 px con el texto "Studio". Es el estado
   "minimizado" del panel.
 - `StudioPanel`: ventana con el mismo diseño que las celdas del visor (fondo de
   tarjeta, línea fina, esquinas redondeadas, cabecera con título y botones de
@@ -17,7 +17,7 @@ mano; el margen que deja la máscara es del negro de las vistas.
 from __future__ import annotations
 
 from PySide6.QtCore import QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPen, QRegion
+from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPen, QRegion
 from PySide6.QtWidgets import (QAbstractButton, QFrame, QHBoxLayout, QLabel, QToolButton,
                                QVBoxLayout, QWidget)
 
@@ -28,7 +28,7 @@ from theme import (ACCENT, ACCENT_TEXT, CARD, CELL_BG, LINE, LINE_STRONG, RADIUS
 class StudioLauncher(QAbstractButton):
     """Botón circular flotante (como el de un chat de ayuda en una página web)."""
 
-    SIZE = 52
+    SIZE = 60
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -40,8 +40,6 @@ class StudioLauncher(QAbstractButton):
         self.setToolTip("Studio: información del paciente")
         self.setAccessibleName("Abrir Studio, información del paciente")
         self._hover = False
-        self._pix = icon_pixmap("patient", TEXT_DIM, 48)
-        self._pix_hover = icon_pixmap("patient", TEXT, 48)
 
     def sizeHint(self) -> QSize:
         return QSize(self.SIZE, self.SIZE)
@@ -81,10 +79,12 @@ class StudioLauncher(QAbstractButton):
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.setPen(QPen(QColor(255, 255, 255, 30), 1))
         p.drawArc(disc.adjusted(2, 2, -2, -2), 35 * 16, 110 * 16)
-        side = 24.0
-        target = QRectF((self.width() - side) / 2, (self.height() - side) / 2, side, side)
-        pix = self._pix_hover if self._hover else self._pix
-        p.drawPixmap(target, pix, QRectF(pix.rect()))
+        font = QFont(self.font())
+        font.setPixelSize(12)
+        font.setWeight(QFont.Weight.DemiBold)
+        p.setFont(font)
+        p.setPen(QColor(TEXT if (self._hover or self.hasFocus()) else TEXT_DIM))
+        p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "Studio")
         p.end()
 
 

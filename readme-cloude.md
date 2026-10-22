@@ -28,20 +28,28 @@ Base: `master` (v2.1.2, ya con el CBCT 3D y Studio).
   Al activar o desactivar el 3D con una vista maximizada, primero se restaura la rejilla.
 - Umbral: ya no es un botón + deslizador sueltos. Es una **cápsula** en la cabecera
   (icono de regletas, "UMBRAL", deslizador con relleno degradado índigo y asa con aro,
-  valor en una pastilla de tipografía monoespaciada). El botón de regletas la recoge
-  (queda un círculo) o la abre. Nombres conservados: `threshold_button`,
+  valor en una pastilla de tipografía monoespaciada). **Recogida por defecto** (queda
+  un círculo con el icono de regletas); el botón la abre. Resolución del deslizador:
+  10 000 pasos (`SLIDER_STEPS`, antes 1000), valor con un decimal.
+- Umbral en vivo: la superficie se actualiza mientras se arrastra (temporizador de 0 ms,
+  sin espera). Mientras se arrastra se usa una malla de media resolución y suavizado
+  ligero (`SMOOTH_DRAG`); al soltar se recalcula a resolución completa. El coste estaba
+  en los ~700k triángulos (normales ≈ 380 ms), no en el suavizado. Gradientes de
+  FlyingEdges desactivados (no se usaban). Nombres conservados: `threshold_button`,
   `threshold_slider`, `threshold_value`. La lógica del umbral no cambia.
-- Interacción 3D sin tocar: clic derecho = desplazar, rueda = zoom, izquierdo = nada.
+- Navegación igual que los STL (`_RotateZoomStyle`): clic derecho = girar, rueda = zoom,
+  izquierdo y central = nada; el modelo nunca se desplaza y no hay atajos de VTK.
 
 ### Botón flotante y panel Studio (viewers/studio_panel.py, nuevo)
-- `StudioLauncher`: botón **circular de 52 px** abajo a la derecha (como el de un chat
-  de ayuda en una web), con degradado, borde fino, icono de paciente, borde índigo al
+- `StudioLauncher`: botón **circular de 60 px** con el texto "Studio" abajo a la derecha
+  (como el de un chat de ayuda en una web), con degradado, borde fino, borde índigo al
   pasar el ratón o con foco. Es el estado "minimizado".
 - `StudioPanel`: ventana con el diseño de las celdas (fondo de tarjeta, línea fina,
   esquinas de 12 px), cabecera con "Studio" + nombre del paciente y botones minimizar /
   maximizar / volver a la vista del paciente. Dentro va el `_InfoPanel` (ahora sin caja
-  doble: `set_flat(True)`). Por defecto su altura no tapa la cabecera de la vista 3D
-  (el umbral sigue accesible); para verlo grande, maximizar.
+  doble: `set_flat(True)`). Al abrirlo desde el botón flotante es **alargado en vertical** (casi toda la altura
+  del visor, hasta 780 px, 380 px de ancho) y puede tapar el botón del umbral: se
+  minimiza para volver a verlo.
 - Ambos son ventanas nativas (`WA_NativeWindow`) porque flotan sobre el widget nativo
   de VTK (antes quedaban restos de pintura). Se pintan a mano y se recortan con máscara.
 - `DicomViewer`: `studio_launcher`, `studio` (StudioPanel), `_patient_name()`,
@@ -54,9 +62,9 @@ Base: `master` (v2.1.2, ya con el CBCT 3D y Studio).
   nueva `icon_pixmap(nombre, color, tamaño)`.
 
 ### Pruebas
-- `test_app.py`: 5 pruebas nuevas (botón flotante, abrir/maximizar/minimizar Studio,
-  maximizar la ventana 3D, cápsula del umbral, apagar el 3D devuelve el panel a la
-  rejilla). 17 pruebas en total con Qt real bajo Xvfb
+- `test_app.py`: 7 pruebas nuevas (botón flotante, abrir/maximizar/minimizar Studio y forma vertical,
+  maximizar la ventana 3D, cápsula del umbral, umbral en vivo, navegación como el STL,
+  apagar el 3D devuelve el panel a la rejilla). 19 pruebas en total con Qt real bajo Xvfb
   (`QT_QPA_PLATFORM=xcb xvfb-run pytest`); revisadas capturas reales de pantalla.
 - No probado en Windows real (DPI/escalado, máscaras de ventanas nativas) ni con el
   .exe: reconstruir con `build.bat`. Sin cambios de versión: sube `version.py` al publicar.

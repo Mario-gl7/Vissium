@@ -202,6 +202,7 @@ def test_cbct_studio_opens_maximizes_and_collapses(qtbot, window, fixtures):
     assert dv.info_panel.parent() is dv.studio
     assert "PRUEBA" in dv.studio.subtitle.text()
     normal = dv.studio.geometry()
+    assert normal.height() > normal.width() * 1.5      # alargado en vertical
     dv.studio.btn_maximize.click()
     QApplication.processEvents()
     assert dv.studio.width() > normal.width() and dv.studio_maximized
@@ -228,12 +229,48 @@ def test_cbct_window_maximizes_like_the_other_views(qtbot, window, fixtures):
 def test_cbct_threshold_capsule_toggles(qtbot, window, fixtures):
     dv = _open_cbct(qtbot, window, fixtures)
     cell = dv.cbct_viewer
-    assert cell.threshold_slider.isVisible()
-    cell.threshold_button.setChecked(False)
-    assert not cell.threshold_slider.isVisible()
+    assert not cell.threshold_slider.isVisible()          # recogida por defecto
     assert cell.threshold_capsule.maximumWidth() < 60
     cell.threshold_button.setChecked(True)
     assert cell.threshold_slider.isVisible()
+    assert cell.threshold_slider.maximum() >= 10000        # ajuste fino
+    cell.threshold_button.setChecked(False)
+    assert not cell.threshold_slider.isVisible()
+
+
+def test_cbct_threshold_updates_surface_live(qtbot, window, fixtures):
+    dv = _open_cbct(qtbot, window, fixtures)
+    cell = dv.cbct_viewer
+    before = cell._surface.GetValue(0)
+    cell.threshold_slider.setValue(max(0, cell.threshold_slider.value() - 1500))
+    qtbot.waitUntil(lambda: cell._surface.GetValue(0) != before, timeout=2000)
+
+
+def test_cbct_navigation_matches_stl(qtbot, window, fixtures):
+    dv = _open_cbct(qtbot, window, fixtures)
+    cell = dv.cbct_viewer
+    iren = cell._vtk_widget.GetRenderWindow().GetInteractor()
+    cam = cell._vtk_widget.GetRenderWindow().GetRenderers().GetFirstRenderer().GetActiveCamera()
+
+    def state():
+        return cam.GetPosition(), cam.GetFocalPoint()
+
+    def drag(button, p0, p1):
+        iren.SetEventInformation(*p0)
+        getattr(iren, f"{button}ButtonPressEvent")()
+        for t in range(1, 6):
+            iren.SetEventInformation(p0[0] + (p1[0] - p0[0]) * t // 5, p0[1] + (p1[1] - p0[1]) * t // 5)
+            iren.MouseMoveEvent()
+        getattr(iren, f"{button}ButtonReleaseEvent")()
+
+    before = state()
+    drag("Left", (200, 200), (260, 230))
+    drag("Middle", (200, 200), (260, 230))
+    assert state() == before                      # izquierdo y central no hacen nada
+    drag("Right", (200, 200), (280, 240))
+    after = state()
+    assert after != before                        # derecho gira
+    assert after[1] == pytest.approx(before[1])   # y nunca desplaza el punto focal
 
 
 def test_cbct_off_returns_info_panel_to_grid(qtbot, window, fixtures):
